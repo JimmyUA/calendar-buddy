@@ -10,34 +10,35 @@ from telegram.ext import (
     ContextTypes,
 )
 
-import config # Load config first
+import config # Load config first (initializes Firestore, etc.)
 import handlers # Import our handler functions
 
 # Enable logging
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO # Or logging.DEBUG
 )
-# Set higher logging level for httpx to avoid excessive DEBUG messages
+# Set higher logging level for libraries that produce too much noise
 logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("googleapiclient.discovery_cache").setLevel(logging.ERROR) # Silence cache warnings
+logging.getLogger("googleapiclient.discovery_cache").setLevel(logging.ERROR)
 
 logger = logging.getLogger(__name__)
 
 def main() -> None:
     """Start the bot."""
     if not config.TELEGRAM_BOT_TOKEN:
-        logger.critical("TELEGRAM_BOT_TOKEN not found in environment/config. Exiting.")
+        logger.critical("TELEGRAM_BOT_TOKEN not found. Exiting.")
         return
-
-    # Check if Firestore client is available after import
+    # Check if essential services initialized correctly
     if config.FIRESTORE_DB is None:
-        logger.critical("FATAL: Firestore client failed to initialize. Exiting.")
+        logger.critical("Firestore client failed initialization. Exiting.")
         return
+    # LLM service availability check (optional, bot can run without LLM for basic auth/commands)
+    # if not llm_service.llm_available:
+    #     logger.warning("LLM Service not available. Some features will be disabled.")
 
     logger.info("Starting bot...")
 
     # --- Create the Application ---
-    # You can configure persistence here if using PTB's built-in options later
     application = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
 
     # --- Register Handlers ---
@@ -49,8 +50,7 @@ def main() -> None:
     application.add_handler(CommandHandler("disconnect_calendar", handlers.disconnect_calendar))
     application.add_handler(CommandHandler("summary", handlers.summary_command))
 
-    # Message Handler (for chat and natural language event creation)
-    # Ensure it doesn't process commands
+    # Message Handler (for natural language processing)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.handle_message))
 
     # Callback Query Handler (for inline buttons)
@@ -61,13 +61,12 @@ def main() -> None:
 
     # --- Start the Bot ---
     logger.info("Running bot polling...")
-    # Start polling - this blocks until interrupted
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
     logger.info("Bot stopped.")
 
 if __name__ == "__main__":
-    # **IMPORTANT:** Before running this, start the oauth_server.py in a separate terminal:
+    # **IMPORTANT:** Remember to run oauth_server.py in a separate terminal first!
     # `python oauth_server.py`
     # Then run this bot script:
     # `python bot.py`
