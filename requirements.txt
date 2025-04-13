@@ -1,0 +1,10 @@
+python-telegram-bot[job-queue]>=20.6 # Use job queue extras for potential future use
+google-api-python-client
+google-auth-oauthlib
+google-auth-httplib2
+google-generativeai # For Gemini
+Flask
+python-dotenv
+httpx
+dateparser
+python-dateutil
