@@ -8,3 +8,21 @@ python-dotenv
 httpx
 dateparser
 python-dateutil
+# Langchain Google GenAI integration (Let this pull the correct google-generativeai version)
+langchain-google-genai>=1.0.0 # Use a reasonable lower bound compatible with langchain 0.2+
+
+# Optional: Langchain community components if needed
+langchain-community>=0.2.0
+
+# REMOVE this line if it exists:
+# google-generativeai
+
+# Other libraries
+pytz
+python-dateutil
+google-cloud-firestore
+google-auth-oauthlib
+google-auth-httplib2
+Flask # Or FastAPI if used for oauth server
+python-dotenv
+httpx

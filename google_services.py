@@ -3,7 +3,9 @@ import logging
 import json
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta # Ensure timedelta is imported
+from dateutil import parser as dateutil_parser
+
 import pytz # <--- ADD IMPORT
 
 # Google specific imports
@@ -89,6 +91,75 @@ def get_user_timezone_str(user_id: int) -> str | None:
     except Exception as e:
         logger.error(f"Error fetching timezone for user {user_id}: {e}", exc_info=True)
         return None
+
+async def get_calendar_events(user_id: int, time_min_iso: str, time_max_iso: str, max_results: int = 25) -> list | None:
+    """
+    Fetches events given ISO datetime strings.
+    Returns list of event dicts or None on error.
+    """
+    service = _build_calendar_service_client(user_id)
+    if not service: return None
+    logger.debug(f"GS: Fetching events for {user_id} from {time_min_iso} to {time_max_iso}")
+    try:
+        events_result = service.events().list(
+            calendarId='primary', timeMin=time_min_iso, timeMax=time_max_iso,
+            maxResults=max_results, singleEvents=True, orderBy='startTime'
+        ).execute()
+        events = events_result.get('items', [])
+        # Return essential info for the agent
+        return [
+            {
+                "id": e.get("id"),
+                "summary": e.get("summary"),
+                "start": e.get("start"),
+                "end": e.get("end"),
+                "description": e.get("description"),
+                "location": e.get("location"),
+            } for e in events
+        ]
+    except HttpError as error:
+        # ... (error handling as before, including delete_user_token on 401) ...
+        logger.error(f"GS: API error fetching events for {user_id}: {error}")
+        if error.resp.status == 401: delete_user_token(user_id)
+        return None
+    except Exception as e: logger.error(f"GS: Unexpected error fetching events for {user_id}: {e}", exc_info=True); return None
+
+# --- NEW: Dedicated Search Function ---
+async def search_calendar_events(user_id: int, query: str, time_min_iso: str, time_max_iso: str, max_results: int = 10) -> list | None:
+    """
+    Searches events using a query string within a time range.
+    Returns list of essential event info dicts or None on error.
+    """
+    service = _build_calendar_service_client(user_id)
+    if not service: return None
+    logger.info(f"GS: Searching events for {user_id} with query '{query}' from {time_min_iso} to {time_max_iso}")
+    try:
+        events_result = service.events().list(
+            calendarId='primary',
+            q=query, # Use the q parameter for searching
+            timeMin=time_min_iso,
+            timeMax=time_max_iso,
+            maxResults=max_results,
+            singleEvents=True,
+            orderBy='startTime' # Or 'relevance' if preferred for search
+        ).execute()
+        events = events_result.get('items', [])
+        logger.info(f"GS: Found {len(events)} events matching search.")
+        # Return essential info
+        return [
+            {
+                "id": e.get("id"),
+                "summary": e.get("summary"),
+                "start": e.get("start"),
+                "end": e.get("end"),
+            } for e in events
+        ]
+    except HttpError as error:
+        # ... (error handling as before) ...
+        logger.error(f"GS: API error searching events for {user_id}: {error}")
+        if error.resp.status == 401: delete_user_token(user_id)
+        return None
+    except Exception as e: logger.error(f"GS: Unexpected error searching events for {user_id}: {e}", exc_info=True); return None
 
 def get_google_auth_flow():
     """Creates and returns a Google OAuth Flow object."""
@@ -246,32 +317,6 @@ def _build_calendar_service_client(user_id: int):
         return None
     except Exception as e:
         logger.error(f"Unexpected error building Calendar service for {user_id}: {e}"); return None
-
-
-async def get_calendar_events(user_id: int, time_min: datetime, time_max: datetime, max_results: int = 25) -> list | None:
-    """Fetches events from the user's calendar. Returns list of events or None on error."""
-    service = _build_calendar_service_client(user_id)
-    if not service: return None
-
-    time_min_iso = time_min.isoformat()
-    time_max_iso = time_max.isoformat()
-    logger.debug(f"Fetching events for user {user_id} from {time_min_iso} to {time_max_iso}")
-
-    try:
-        events_result = service.events().list(
-            calendarId='primary', timeMin=time_min_iso, timeMax=time_max_iso,
-            maxResults=max_results, singleEvents=True, orderBy='startTime'
-        ).execute()
-        events = events_result.get('items', [])
-        return events
-    except HttpError as error:
-        logger.error(f"API error fetching events for {user_id}: {error}")
-        if error.resp.status == 401: logger.warning(f"Auth error (401) fetching events for {user_id}. Clearing token."); delete_user_token(user_id)
-        elif error.resp.status == 403 and "accessNotConfigured" in str(error): logger.error(f"Calendar API not enabled for project!")
-        return None
-    except Exception as e:
-        logger.error(f"Unexpected error fetching events for {user_id}: {e}", exc_info=True)
-        return None
 
 async def create_calendar_event(user_id: int, event_data: dict) -> tuple[bool, str, str | None]:
     """Creates an event. Returns (success, message, event_link)."""

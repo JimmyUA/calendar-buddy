@@ -13,6 +13,7 @@ from pytz.exceptions import UnknownTimeZoneError
 import config
 import google_services as gs # For Calendar and Auth services
 import llm_service          # Import LLM Service
+from agent import initialize_agent
 
 logger = logging.getLogger(__name__)
 
@@ -397,41 +398,72 @@ async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await _handle_calendar_summary(update, context, {"time_period": time_period_str}) # Pass params dict
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handles non-command messages using AI intent classification and delegates."""
-
-    # ===> ADD DEFENSIVE CHECK <===
-    if not update or not update.message or not update.message.text:
-        logger.warning("handle_message received an update without a message or text.")
-        return # Ignore updates without message text
-    # ===> END ADDED CHECK <===
-
+    """Handles non-command messages by invoking the LangChain agent."""
+    if not update.message or not update.message.text:
+        logger.warning("handle_message received update without message text.")
+        return
     user_id = update.effective_user.id
     text = update.message.text
-    if not text: return
-    logger.info(f"Handler: Received message from user {user_id}: '{text[:50]}...'")
-    # 1. Get user's timezone early if possible (needed for LLM context)
-    user_tz = pytz.timezone(gs.get_user_timezone_str(user_id) or 'UTC') # Default to UTC if not set
-    now_local = datetime.now(user_tz)
+    logger.info(f"Agent Handler: Received message from user {user_id}: '{text[:50]}...'")
 
-    # 1. Classify Intent using LLM service
-    intent_data =  await llm_service.classify_intent_and_extract_params(text, now_local.isoformat())
+    # 1. Check connection status
+    if not gs.is_user_connected(user_id):
+        await update.message.reply_text("Please connect your Google Calendar first using /connect_calendar.")
+        return
 
-    intent = "GENERAL_CHAT"; parameters = {}
-    if intent_data: intent = intent_data.get("intent", "GENERAL_CHAT"); parameters = intent_data.get("parameters", {})
-    else: logger.warning(f"Intent classification failed for user {user_id}. Defaulting to GENERAL_CHAT.")
+    # 2. Get user timezone (prompt if needed)
+    user_timezone_str = gs.get_user_timezone_str(user_id)
+    if not user_timezone_str:
+        # Instead of blocking, maybe default and inform? Or stick to blocking.
+        # Let's default to UTC for agent calls if not set, but inform user.
+        user_timezone_str = 'UTC'
+        await update.message.reply_text("Note: Your timezone isn't set. Using UTC. Use /set_timezone for accurate local times.")
+        # Alternative: Block until set
+        # await update.message.reply_text("Please set timezone first (/set_timezone).")
+        # return
 
-    # 2. Check Connection if needed
-    if intent in ["CALENDAR_SUMMARY", "CALENDAR_CREATE", "CALENDAR_DELETE"]:
-        if not gs.is_user_connected(user_id):
-            action = {"CALENDAR_SUMMARY": "view calendar", "CALENDAR_CREATE": "add events", "CALENDAR_DELETE": "delete events"}.get(intent, "manage calendar")
-            await update.message.reply_text(f"To {action}, please connect calendar first (/connect_calendar)."); return
+    # 3. Retrieve/Initialize conversation history from context.user_data
+    if 'lc_history' not in context.user_data:
+        context.user_data['lc_history'] = []
+    chat_history: list[dict] = context.user_data['lc_history'] # Stores {'role': '...', 'content': '...'}
 
-    # 3. Route to specific internal handler
-    if intent == "CALENDAR_SUMMARY": await _handle_calendar_summary(update, context, parameters)
-    elif intent == "CALENDAR_CREATE": await _handle_calendar_create(update, context, parameters)
-    elif intent == "CALENDAR_DELETE": await _handle_calendar_delete(update, context, parameters)
-    elif intent == "GENERAL_CHAT": await _handle_general_chat(update, context, text)
-    else: logger.error(f"Handler: Unknown intent state: {intent}"); await _handle_general_chat(update, context, text)
+    # Add current user message to simple history list
+    chat_history.append({'role': 'user', 'content': text})
+
+    # 4. Initialize Agent Executor (with user context and history)
+    try:
+        # Pass the simple history list; the initialize function converts it for LangChain memory
+        agent_executor = initialize_agent(user_id, user_timezone_str, chat_history)
+    except Exception as e:
+        logger.error(f"Failed to initialize agent for user {user_id}: {e}", exc_info=True)
+        await update.message.reply_text("Sorry, there was an error setting up the AI agent.")
+        chat_history.pop() # Remove user message if agent failed to init
+        return
+
+    # 5. Invoke Agent Executor
+    await update.message.chat.send_action(action="typing") # Indicate thinking
+    try:
+        # Use ainvoke for async execution
+        # Input structure depends on the prompt template (e.g., 'input' key)
+        response = await agent_executor.ainvoke({
+            "input": text
+            # chat_history is handled by the memory object passed to AgentExecutor
+            })
+        agent_response = response.get('output', "Sorry, I didn't get a response.")
+
+    except Exception as e:
+        logger.error(f"Agent execution error for user {user_id}: {e}", exc_info=True)
+        agent_response = "Sorry, an error occurred while processing your request with the agent."
+        chat_history.pop() # Remove user message if agent failed
+
+    # 6. Send response and update history
+    await update.message.reply_text(agent_response)
+    if agent_response and "error" not in agent_response.lower(): # Avoid saving error messages as model response
+        chat_history.append({'role': 'model', 'content': agent_response})
+
+    # 7. Trim history
+    if len(chat_history) > config.MAX_HISTORY_MESSAGES:
+        context.user_data['lc_history'] = chat_history[-config.MAX_HISTORY_MESSAGES:]
 
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

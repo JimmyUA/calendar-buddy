@@ -115,7 +115,6 @@ async def get_chat_response(history: list[dict]) -> str | None:
         return None
 
 
-
 async def classify_intent_and_extract_params(text: str, current_time_iso: str) -> dict | None:
     """
     Uses LLM (Gemini) to classify user intent and extract relevant parameters.
@@ -269,7 +268,6 @@ async def parse_date_range_llm(text_period: str, current_time_iso: str) -> dict 
         logger.error(f"LLM Service (Date Range): Unexpected error - {e}", exc_info=True)
         return None
 
-
 async def extract_event_details_llm(text: str, current_time_iso: str) -> dict | None:
     """Uses LLM to extract event details. Requires user's current time."""
     if not llm_available or not gemini_model: logger.error(...); return None
@@ -366,3 +364,130 @@ async def find_event_match_llm(user_request: str, candidate_events: list, curren
     except Exception as e:
         logger.error(f"LLM Service (Event Match): Unexpected error - {e}", exc_info=True)
         return None
+
+# === Safe JSON/Literal Parsing Helper ===
+def _parse_llm_json_output(llm_output: str) -> dict | None:
+    """Attempts to parse LLM output as JSON, falling back to literal_eval."""
+    if not llm_output: return None
+    cleaned_text = llm_output.strip().removeprefix("```json").removesuffix("```").strip()
+    logger.debug(f"Attempting to parse: {cleaned_text}")
+    try:
+        # Try strict JSON first
+        return json.loads(cleaned_text)
+    except json.JSONDecodeError:
+        logger.warning(f"JSON parsing failed, trying literal_eval for: {cleaned_text}")
+        try:
+            # Fallback to literal eval (handles single quotes etc.)
+            evaluated = ast.literal_eval(cleaned_text)
+            if isinstance(evaluated, dict):
+                return evaluated
+            else:
+                logger.error(f"ast.literal_eval did not return a dict. Type: {type(evaluated)}")
+                return None
+        except (ValueError, SyntaxError, TypeError) as eval_err:
+            logger.error(f"JSON and literal parsing failed: {eval_err}. Raw: {cleaned_text}")
+            return None
+
+
+# === LLM Functions for Argument Extraction ===
+
+async def extract_read_args_llm(text_period: str, current_time_iso: str) -> dict | None:
+    """Uses LLM to get start_iso and end_iso for reading calendar events."""
+    if not llm_available or not gemini_model: logger.error(...); return None
+    prompt = f"""
+    Analyze the time period description relative to the user's current time ({current_time_iso}).
+    Determine the precise start and end datetime. Assume standard interpretations (e.g., 'today' is 00:00 to 23:59, 'next week' is Mon-Sun).
+    Output ONLY JSON: {{"start_iso": "YYYY-MM-DDTHH:MM:SS+ZZ:ZZ", "end_iso": "YYYY-MM-DDTHH:MM:SS+ZZ:ZZ"}}
+    Use UTC ('Z') or the appropriate offset based on the current time provided.
+
+    Time Period Description: "{text_period}"
+
+    JSON Output:
+    """
+    try:
+        logger.debug(f"LLM Read Args Request: '{text_period}'")
+        response = await gemini_model.generate_content_async(prompt)
+        # --- Standard Response Handling ---
+        if response.prompt_feedback and response.prompt_feedback.block_reason: logger.warning(...); return None
+        if not hasattr(response, 'text'): logger.warning(...); return None
+        # --- Parsing ---
+        parsed_args = _parse_llm_json_output(response.text)
+        # --- Validation ---
+        if not parsed_args or 'start_iso' not in parsed_args or 'end_iso' not in parsed_args:
+            logger.error(f"LLM Read Args invalid structure: {parsed_args}")
+            return None
+        # Validate ISO format (optional but good)
+        try: dateutil_parser.isoparse(parsed_args['start_iso']); dateutil_parser.isoparse(parsed_args['end_iso'])
+        except ValueError: logger.error(f"LLM Read Args invalid ISO format: {parsed_args}"); return None
+        logger.info(f"LLM Read Args Result: {parsed_args}")
+        return parsed_args
+    except Exception as e: logger.error(f"LLM Service (Read Args) Error: {e}", exc_info=True); return None
+
+async def extract_search_args_llm(text_query: str, current_time_iso: str) -> dict | None:
+    """Uses LLM to get query, start_iso, and end_iso for searching calendar events."""
+    if not llm_available or not gemini_model: logger.error(...); return None
+    prompt = f"""
+    Analyze the user's search request relative to their current time ({current_time_iso}).
+    Identify the core search query keywords/phrase.
+    Also determine the relevant start and end datetime for the search window (if a time period like 'next month' or 'last week' is mentioned, otherwise use a sensible default like the next 30 days).
+    Output ONLY JSON: {{"query": "search keywords", "start_iso": "YYYY-MM-DDTHH:MM:SS+ZZ:ZZ", "end_iso": "YYYY-MM-DDTHH:MM:SS+ZZ:ZZ"}}
+    Use UTC ('Z') or the appropriate offset based on the current time provided for dates.
+
+    Search Request: "{text_query}"
+
+    JSON Output:
+    """
+    try:
+        logger.debug(f"LLM Search Args Request: '{text_query}'")
+        response = await gemini_model.generate_content_async(prompt)
+        # --- Standard Response Handling & Parsing ---
+        if response.prompt_feedback and response.prompt_feedback.block_reason: logger.warning(...); return None
+        if not hasattr(response, 'text'): logger.warning(...); return None
+        parsed_args = _parse_llm_json_output(response.text)
+        # --- Validation ---
+        if not parsed_args or 'query' not in parsed_args or 'start_iso' not in parsed_args or 'end_iso' not in parsed_args:
+             logger.error(f"LLM Search Args invalid structure: {parsed_args}"); return None
+        try: dateutil_parser.isoparse(parsed_args['start_iso']); dateutil_parser.isoparse(parsed_args['end_iso'])
+        except ValueError: logger.error(f"LLM Search Args invalid ISO format: {parsed_args}"); return None
+        if not parsed_args.get('query'): logger.warning("LLM Search Args extracted empty query."); # Decide if this is acceptable
+        logger.info(f"LLM Search Args Result: {parsed_args}")
+        return parsed_args
+    except Exception as e: logger.error(f"LLM Service (Search Args) Error: {e}", exc_info=True); return None
+
+async def extract_create_args_llm(event_description: str, current_time_iso: str, user_timezone_str: str) -> dict | None:
+    """Uses LLM to extract the full event body dictionary for creation."""
+    if not llm_available or not gemini_model: logger.error(...); return None
+    prompt = f"""
+    Analyze the user's request to create an event, considering their current time is {current_time_iso} and their timezone is {user_timezone_str}.
+    Extract all relevant details (summary, start time, end time, description, location).
+    Assume a 1-hour duration if only start time is mentioned.
+    Format the start and end times as ISO 8601 strings WITH timezone offset or Z.
+    Output ONLY JSON representing the Google Calendar Event resource body. It MUST include 'summary', 'start' (with 'dateTime' and 'timeZone'), and 'end' (with 'dateTime' and 'timeZone'). Include 'description' and 'location' if found. The 'timeZone' value should be the user's IANA timezone: '{user_timezone_str}'.
+
+    User Request: "{event_description}"
+
+    JSON Event Body Output:
+    """
+    try:
+        logger.debug(f"LLM Create Args Request: '{event_description[:100]}...'")
+        response = await gemini_model.generate_content_async(prompt)
+        # --- Standard Response Handling & Parsing ---
+        if response.prompt_feedback and response.prompt_feedback.block_reason: logger.warning(...); return None
+        if not hasattr(response, 'text'): logger.warning(...); return None
+        event_data = _parse_llm_json_output(response.text)
+        # --- Validation ---
+        if not event_data or not isinstance(event_data, dict): logger.error(f"LLM Create Args not a dict: {event_data}"); return None
+        # Crucial fields for Google API
+        if not event_data.get('summary'): logger.error(f"LLM Create Args missing summary: {event_data}"); return None
+        start = event_data.get('start'); end = event_data.get('end')
+        if not start or not isinstance(start, dict) or not start.get('dateTime') or not start.get('timeZone'): logger.error(f"LLM Create Args invalid start: {start}"); return None
+        if not end or not isinstance(end, dict) or not end.get('dateTime') or not end.get('timeZone'): logger.error(f"LLM Create Args invalid end: {end}"); return None
+        # Validate timezones and dates (optional but recommended)
+        try:
+            if start['timeZone'] != user_timezone_str or end['timeZone'] != user_timezone_str: logger.warning("LLM returned different timezone than requested.")
+            dateutil_parser.isoparse(start['dateTime']); dateutil_parser.isoparse(end['dateTime'])
+        except Exception as e: logger.error(f"LLM Create Args invalid date/tz format: {e}. Data: {event_data}"); return None
+
+        logger.info(f"LLM Create Args Result: {event_data}")
+        return event_data
+    except Exception as e: logger.error(f"LLM Service (Create Args) Error: {e}", exc_info=True); return None
