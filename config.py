@@ -55,4 +55,12 @@ if not OAUTH_REDIRECT_URI:
 if FIRESTORE_DB is None:
      raise RuntimeError("Firestore client could not be initialized. Bot cannot run without Firestore.")
 
+# --- NEW: Firestore Collection Names (Optional but good practice) ---
+# Define collection names as constants
+FS_COLLECTION_TOKENS = 'user_tokens'
+FS_COLLECTION_STATES = 'oauth_states'
+FS_COLLECTION_PREFS = 'user_preferences' # <--- New collection name
+
+print(f"Config loaded. Using Firestore collections: {FS_COLLECTION_TOKENS}, {FS_COLLECTION_STATES}, {FS_COLLECTION_PREFS}")
+
 print("Config loaded successfully.")

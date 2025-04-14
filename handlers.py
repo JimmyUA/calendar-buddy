@@ -3,9 +3,12 @@ import logging
 from datetime import datetime, timedelta, timezone
 from dateutil import parser as dateutil_parser
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes
+from telegram.ext import ContextTypes, ConversationHandler
 from telegram.constants import ParseMode
 import re # Keep for potential simple logic
+# Timezone libraries
+import pytz
+from pytz.exceptions import UnknownTimeZoneError
 
 import config
 import google_services as gs # For Calendar and Auth services
@@ -13,132 +16,218 @@ import llm_service          # Import LLM Service
 
 logger = logging.getLogger(__name__)
 
+# Define history constants
+MAX_HISTORY_TURNS = 10 # Remember last 10 back-and-forth turns
+MAX_HISTORY_MESSAGES = MAX_HISTORY_TURNS * 2
+ASKING_TIMEZONE = range(1)
 # === Helper Function ===
 
-def _format_event_time(event: dict) -> str:
-    """Formats event start/end time nicely for display."""
-    start_str = event['start'].get('dateTime', event['start'].get('date'))
-    end_str = event['end'].get('dateTime', event['end'].get('date'))
+# === Helper Function ===
+
+def _format_event_time(event: dict, user_tz: pytz.BaseTzInfo) -> str:
+    """Formats event start/end time nicely for display in user's timezone."""
+    start_data = event.get('start', {}) # Use .get() for safety
+    end_data = event.get('end', {})   # Use .get() for safety
+
+    start_str = start_data.get('dateTime', start_data.get('date'))
+    end_str = end_data.get('dateTime', end_data.get('date'))
+
+    # ===> ADD Check for None/Empty strings <===
+    if not start_str:
+        logger.warning(f"Event missing start date/time info. Event ID: {event.get('id')}")
+        return "[Unknown Start Time]"
+    # ===> END Check <===
+
     try:
-        if 'date' in event['start']: # All day event
+        if 'date' in start_data: # All day event
+            # Check end date for multi-day all-day events
+            end_dt_str = end_data.get('date')
             start_dt = dateutil_parser.isoparse(start_str).date()
+            if end_dt_str:
+                 # Google API end date for all-day is exclusive, subtract a day for display
+                end_dt = dateutil_parser.isoparse(end_dt_str).date() - timedelta(days=1)
+                if end_dt > start_dt: # Multi-day all-day event
+                    return f"{start_dt.strftime('%a, %b %d')} - {end_dt.strftime('%a, %b %d')} (All day)"
+            # Single all-day event
             return f"{start_dt.strftime('%a, %b %d')} (All day)"
         else: # Timed event
-             start_dt = dateutil_parser.isoparse(start_str)
-             end_dt = dateutil_parser.isoparse(end_str)
-             start_fmt = start_dt.strftime('%a, %b %d, %Y at %I:%M %p %Z')
-             end_fmt = end_dt.strftime('%I:%M %p %Z')
-             if start_dt.date() != end_dt.date():
-                 end_fmt = end_dt.strftime('%b %d, %Y %I:%M %p %Z')
+             # Check end_str existence before parsing
+             if not end_str:
+                 logger.warning(f"Timed event missing end time. Event ID: {event.get('id')}")
+                 end_str = start_str # Fallback to start time if end is missing (shouldn't happen)
+
+             start_dt_aware = dateutil_parser.isoparse(start_str).astimezone(user_tz)
+             end_dt_aware = dateutil_parser.isoparse(end_str).astimezone(user_tz)
+
+             start_fmt = start_dt_aware.strftime('%a, %b %d, %Y at %I:%M %p %Z') # %Z shows tz abbr
+             end_fmt = end_dt_aware.strftime('%I:%M %p %Z')
+             if start_dt_aware.date() != end_dt_aware.date():
+                 end_fmt = end_dt_aware.strftime('%b %d, %Y %I:%M %p %Z')
              return f"{start_fmt} - {end_fmt}"
     except Exception as e:
-        logger.error(f"Error parsing event time for formatting: {e}. Event: {event.get('id')}")
-        return start_str # Fallback
+        logger.error(f"Error parsing/formatting event time: {e}. Event ID: {event.get('id')}, Start: '{start_str}', End: '{end_str}'", exc_info=True) # Log full traceback
+        # Fallback to showing raw start time string if formatting fails
+        return f"{start_str} [Error Formatting]"
+async def _get_user_tz_or_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> pytz.BaseTzInfo | None:
+    """Gets user timezone object or prompts them to set it, returning None if prompt sent."""
+    user_id = update.effective_user.id
+    tz_str = gs.get_user_timezone_str(user_id)
+    if tz_str:
+        try:
+            return pytz.timezone(tz_str)
+        except UnknownTimeZoneError:
+            logger.warning(f"Invalid timezone '{tz_str}' found in DB for user {user_id}. Prompting.")
+            # Optionally delete invalid tz from DB here
+    # If no valid timezone found
+    await update.message.reply_text("Please set your timezone first using the /set_timezone command so I can understand times correctly.")
+    return None
 
 # === Core Action Handlers (Internal) ===
 
 async def _handle_general_chat(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
-    """Handles general chat messages."""
-    logger.info(f"Handling GENERAL_CHAT for user {update.effective_user.id}")
-    # Call llm_service
-    response_text = await llm_service.get_chat_response(text)
+    """Handles general chat messages, managing conversation history."""
+    user_id = update.effective_user.id
+    logger.info(f"Handling GENERAL_CHAT for user {user_id} with history")
+
+    # 1. Retrieve or initialize history from user_data
+    # user_data is a dict unique to each user in each chat
+    if 'llm_history' not in context.user_data:
+        context.user_data['llm_history'] = []
+    history: list[dict] = context.user_data['llm_history']
+
+    # 2. Add current user message to history (using the simple structure for storage)
+    history.append({'role': 'user', 'content': text})
+
+    # 3. Call LLM service with history
+    response_text = await llm_service.get_chat_response(history) # Pass the history
+
+    # 4. Process response and update history
     if response_text:
         await update.message.reply_text(response_text)
+        # Add bot's response to history
+        history.append({'role': 'model', 'content': response_text})
     else:
+        # Handle LLM failure or blocked response
         await update.message.reply_text("Sorry, I couldn't process that chat message right now.")
+        # Remove the last user message from history if the bot failed to respond
+        if history and history[-1]['role'] == 'user':
+            history.pop()
+
+    # 5. Trim history to MAX_HISTORY_MESSAGES (e.g., 20 messages for 10 turns)
+    if len(history) > MAX_HISTORY_MESSAGES:
+        logger.debug(f"Trimming history for user {user_id} from {len(history)} to {MAX_HISTORY_MESSAGES}")
+        # Keep the most recent messages
+        context.user_data['llm_history'] = history[-MAX_HISTORY_MESSAGES:]
+        # Alternative: history = history[-MAX_HISTORY_MESSAGES:] # Reassign if not using user_data directly
 
 async def _handle_calendar_summary(update: Update, context: ContextTypes.DEFAULT_TYPE, parameters: dict):
-    """Handles CALENDAR_SUMMARY intent."""
+    """Handles CALENDAR_SUMMARY intent using user's timezone."""
     user_id = update.effective_user.id
     logger.info(f"Handling CALENDAR_SUMMARY for user {user_id}")
+
+    user_tz = await _get_user_tz_or_prompt(update, context)
+    if not user_tz: return # Stop if user needs to set timezone
+
     time_period_str = parameters.get("time_period", "today")
+    await update.message.reply_text(f"Okay, checking your calendar for '{time_period_str}'...")
 
-    await update.message.reply_text(f"Okay, let me check your calendar for '{time_period_str}'...")
+    # 1. Parse date range using LLM with local time context
+    now_local = datetime.now(user_tz)
+    parsed_range = await llm_service.parse_date_range_llm(time_period_str, now_local.isoformat())
 
-    # 1. Parse date range using LLM service
-    parsed_range = await llm_service.parse_date_range_llm(time_period_str)
     start_date, end_date = None, None
     display_period_str = time_period_str
 
     if parsed_range:
         try:
+            # Parse ISO strings (which have offset/Z)
             start_date = dateutil_parser.isoparse(parsed_range['start_iso'])
             end_date = dateutil_parser.isoparse(parsed_range['end_iso'])
-            if start_date.tzinfo is None: start_date = start_date.replace(tzinfo=timezone.utc)
-            if end_date.tzinfo is None: end_date = end_date.replace(tzinfo=timezone.utc)
-        except ValueError as e: logger.error(f"Error parsing ISO dates from LLM: {e}"); start_date = None
+            # Convert to user's timezone for accurate day/week boundaries if needed,
+            # although passing ISO with offset to Google API often works well.
+            # For calculating *local* start/end of day, we need user_tz
+            # Example: If user asks for "today"
+            if time_period_str.lower() == "today":
+                 start_date = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+                 end_date = now_local.replace(hour=23, minute=59, second=59, microsecond=999999)
+            # Need more sophisticated logic for "next week", "this weekend" based on user_tz
+
+        except ValueError as e: logger.error(...); start_date = None
 
     if start_date is None or end_date is None:
-        logger.warning(f"Date range parsing failed/fallback for '{time_period_str}'. Using today.")
-        await update.message.reply_text(f"Had trouble understanding '{time_period_str}', showing today instead.")
-        now = datetime.now(timezone.utc)
-        start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        end_date = now.replace(hour=23, minute=59, second=59, microsecond=999999)
-        display_period_str = "today"
+        logger.warning(f"Date range parsing failed/fallback for '{time_period_str}'. Using local today.")
+        await update.message.reply_text(f"Had trouble with '{time_period_str}', showing today ({now_local.strftime('%Y-%m-%d')}) instead.")
+        start_date = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+        end_date = now_local.replace(hour=23, minute=59, second=59, microsecond=999999)
+        display_period_str = f"today ({now_local.strftime('%Y-%m-%d')})"
 
-    if end_date <= start_date: # Ensure valid range
-        end_date = start_date.replace(hour=23, minute=59, second=59, microsecond=999999)
-        if end_date <= start_date: end_date = start_date + timedelta(seconds=1)
+    if end_date <= start_date: end_date = start_date.replace(hour=23, minute=59, second=59, microsecond=999999); # Ensure valid range
 
-    # 2. Fetch events using Google service
+    # 2. Fetch events (using the calculated datetimes, which are now timezone-aware)
     events = await gs.get_calendar_events(user_id, time_min=start_date, time_max=end_date)
 
     # 3. Format and send response
-    if events is None:
-        await update.message.reply_text("Sorry, I couldn't fetch your calendar events. Please ensure I have permission (/my_status) or try again later.")
-    elif not events:
-        await update.message.reply_text(f"No events found for '{display_period_str}'.")
-    else:
-        summary_lines = [f"🗓️ Events for {display_period_str}:"]
-        for event in events:
-            time_str = _format_event_time(event)
-            summary_lines.append(f"- *{event.get('summary', 'No Title')}* ({time_str})")
-        await update.message.reply_text("\n".join(summary_lines), parse_mode=ParseMode.MARKDOWN)
+    if events is None: await update.message.reply_text("Sorry, couldn't fetch events."); return
+    if not events: await update.message.reply_text(f"No events found for '{display_period_str}'."); return
+
+    summary_lines = [f"🗓️ Events for {display_period_str} (Times in {user_tz.zone}):"]
+    for event in events:
+        time_str = _format_event_time(event, user_tz) # Pass user_tz for formatting
+        summary_lines.append(f"- *{event.get('summary', 'No Title')}* ({time_str})")
+    await update.message.reply_text("\n".join(summary_lines), parse_mode=ParseMode.MARKDOWN)
+
 
 
 async def _handle_calendar_create(update: Update, context: ContextTypes.DEFAULT_TYPE, parameters: dict):
-    """Handles CALENDAR_CREATE intent."""
+    """Handles CALENDAR_CREATE intent using user's timezone."""
     user_id = update.effective_user.id
     logger.info(f"Handling CALENDAR_CREATE for user {user_id}")
-    event_description = parameters.get("event_description")
 
-    if not event_description:
-        logger.error(f"CALENDAR_CREATE handler called without event_description.")
-        await update.message.reply_text("I understood you want to create an event, but missed the details. Please try again.")
-        return
+    user_tz = await _get_user_tz_or_prompt(update, context)
+    if not user_tz: return
+
+    event_description = parameters.get("event_description")
+    if not event_description: logger.error(...); await update.message.reply_text(...); return
 
     await update.message.reply_text("Okay, processing that event...")
 
-    # 1. Extract structured details using LLM service
-    event_details = await llm_service.extract_event_details_llm(event_description)
+    # 1. Extract details using LLM with local time context
+    now_local = datetime.now(user_tz)
+    event_details = await llm_service.extract_event_details_llm(event_description, now_local.isoformat())
 
-    if not event_details:
-         await update.message.reply_text("Sorry, I couldn't understand the event details well enough to schedule it. Could you try phrasing it differently?")
-         return
+    if not event_details: await update.message.reply_text(...); return
 
-    # 2. Prepare confirmation
+    # 2. Prepare confirmation (parsing dates needs care)
     try:
         summary = event_details.get('summary')
-        start_str = event_details.get('start_time')
-        if not summary or not start_str: raise ValueError("Missing summary or start time")
+        start_str = event_details.get('start_time') # ISO string from LLM (should have offset)
+        if not summary or not start_str: raise ValueError("Missing essential details")
 
+        # Parse ISO string into aware datetime object
         start_dt = dateutil_parser.isoparse(start_str)
-        if start_dt.tzinfo is None: start_dt = start_dt.replace(tzinfo=timezone.utc)
+        # Convert to user's timezone for consistent display/handling if needed
+        # start_dt_local = start_dt.astimezone(user_tz)
 
         end_str = event_details.get('end_time')
         end_dt = dateutil_parser.isoparse(end_str) if end_str else None
-        if end_dt and end_dt.tzinfo is None: end_dt = end_dt.replace(tzinfo=timezone.utc)
+        # end_dt_local = end_dt.astimezone(user_tz) if end_dt else None
+
+        # Default end time based on start time
         final_end_dt = end_dt if end_dt else start_dt + timedelta(hours=1)
         if final_end_dt <= start_dt: final_end_dt = start_dt + timedelta(hours=1)
+        # final_end_dt_local = final_end_dt.astimezone(user_tz)
 
+        # Prepare data for Google API: MUST include timeZone field
         google_event_data = {
             'summary': summary, 'location': event_details.get('location'),
             'description': event_details.get('description'),
-            'start': {'dateTime': start_dt.isoformat()},
-            'end': {'dateTime': final_end_dt.isoformat()}, }
+            'start': {'dateTime': start_dt.isoformat(), 'timeZone': user_tz.zone}, # Add IANA timeZone
+            'end': {'dateTime': final_end_dt.isoformat(), 'timeZone': user_tz.zone}, # Add IANA timeZone
+        }
 
-        start_confirm = start_dt.strftime('%a, %b %d, %Y at %I:%M %p %Z')
-        end_confirm = final_end_dt.strftime('%a, %b %d, %Y at %I:%M %p %Z')
+        # Format confirmation message using the parsed (and potentially timezone-converted) times
+        start_confirm = start_dt.astimezone(user_tz).strftime('%a, %b %d, %Y at %I:%M %p %Z') # Display in local TZ
+        end_confirm = final_end_dt.astimezone(user_tz).strftime('%a, %b %d, %Y at %I:%M %p %Z')
         confirm_text = f"Create this event?\n\n" \
                        f"<b>Summary:</b> {summary}\n<b>Start:</b> {start_confirm}\n" \
                        f"<b>End:</b> {end_confirm}\n<b>Desc:</b> {event_details.get('description', 'N/A')}\n" \
@@ -156,20 +245,21 @@ async def _handle_calendar_create(update: Update, context: ContextTypes.DEFAULT_
 
 
 async def _handle_calendar_delete(update: Update, context: ContextTypes.DEFAULT_TYPE, parameters: dict):
-    """Handles CALENDAR_DELETE intent."""
+    """Handles CALENDAR_DELETE intent using user's timezone."""
     user_id = update.effective_user.id
     logger.info(f"Handling CALENDAR_DELETE for user {user_id}")
-    event_description = parameters.get("event_description")
 
-    if not event_description:
-        logger.error(f"CALENDAR_DELETE handler called without event_description.")
-        await update.message.reply_text("I understood you want to delete an event, but missed the details. Please try again.")
-        return
+    user_tz = await _get_user_tz_or_prompt(update, context)
+    if not user_tz: return
+
+    event_description = parameters.get("event_description")
+    if not event_description: logger.error(...); await update.message.reply_text(...); return
 
     await update.message.reply_text(f"Okay, looking for events matching '{event_description[:50]}...'")
 
-    # 1. Determine search window using LLM service
-    parsed_range = await llm_service.parse_date_range_llm(event_description)
+    # 1. Determine search window using LLM with local time context
+    now_local = datetime.now(user_tz)
+    parsed_range = await llm_service.parse_date_range_llm(event_description, now_local.isoformat())
     search_start, search_end = None, None
     if parsed_range:
         try: search_start = dateutil_parser.isoparse(parsed_range['start_iso']); search_end = dateutil_parser.isoparse(parsed_range['end_iso']); search_start-=timedelta(minutes=1); search_end+=timedelta(minutes=1)
@@ -177,7 +267,7 @@ async def _handle_calendar_delete(update: Update, context: ContextTypes.DEFAULT_
     if not search_start: now = datetime.now(timezone.utc); search_start = now.replace(hour=0, minute=0, second=0, microsecond=0); search_end = now + timedelta(days=3)
     logger.info(f"Delete search window: {search_start.isoformat()} to {search_end.isoformat()}")
 
-    # 2. Fetch potential events using Google service
+    # 2. Fetch potential events (gs)
     potential_events = await gs.get_calendar_events(user_id, time_min=search_start, time_max=search_end, max_results=25)
 
     if potential_events is None: await update.message.reply_text("Sorry, couldn't search your calendar now."); return
@@ -204,7 +294,7 @@ async def _handle_calendar_delete(update: Update, context: ContextTypes.DEFAULT_
         event_to_delete = potential_events[event_index]
         event_id = event_to_delete.get('id')
         event_summary = event_to_delete.get('summary', 'No Title')
-        time_confirm = _format_event_time(event_to_delete)
+        time_confirm = _format_event_time(event_to_delete, user_tz)
 
         if not event_id: logger.error(f"Matched event missing ID: {event_to_delete}"); await update.message.reply_text("Sorry, internal error retrieving event ID."); return
 
@@ -308,13 +398,23 @@ async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles non-command messages using AI intent classification and delegates."""
+
+    # ===> ADD DEFENSIVE CHECK <===
+    if not update or not update.message or not update.message.text:
+        logger.warning("handle_message received an update without a message or text.")
+        return # Ignore updates without message text
+    # ===> END ADDED CHECK <===
+
     user_id = update.effective_user.id
     text = update.message.text
     if not text: return
     logger.info(f"Handler: Received message from user {user_id}: '{text[:50]}...'")
+    # 1. Get user's timezone early if possible (needed for LLM context)
+    user_tz = pytz.timezone(gs.get_user_timezone_str(user_id) or 'UTC') # Default to UTC if not set
+    now_local = datetime.now(user_tz)
 
     # 1. Classify Intent using LLM service
-    intent_data = await llm_service.classify_intent_and_extract_params(text)
+    intent_data =  await llm_service.classify_intent_and_extract_params(text, now_local.isoformat())
 
     intent = "GENERAL_CHAT"; parameters = {}
     if intent_data: intent = intent_data.get("intent", "GENERAL_CHAT"); parameters = intent_data.get("parameters", {})
@@ -388,3 +488,61 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     if isinstance(update, Update) and update.effective_message:
          try: await update.effective_message.reply_text("Sorry, an internal error occurred. Please try again.")
          except Exception as e: logger.error(f"Failed to send error message to user: {e}")
+
+
+# --- NEW /set_timezone Conversation Handler ---
+async def set_timezone_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Starts the /set_timezone conversation."""
+    user_id = update.effective_user.id
+    logger.info(f"User {user_id} started /set_timezone.")
+    current_tz = gs.get_user_timezone_str(user_id)
+    prompt = "Please tell me your timezone in IANA format (e.g., 'America/New_York', 'Europe/London', 'Asia/Tokyo').\n"
+    prompt += "You can find a list here: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones\n\n"
+    if current_tz:
+        prompt += f"Your current timezone is set to: `{current_tz}`"
+    else:
+        prompt += "Your timezone is not set yet."
+
+    await update.message.reply_text(prompt, parse_mode=ParseMode.MARKDOWN)
+    return ASKING_TIMEZONE # Transition to the next state
+
+async def received_timezone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Receives potential timezone string, validates, saves, and ends."""
+    user_id = update.effective_user.id
+    timezone_str = update.message.text.strip()
+    logger.info(f"User {user_id} provided timezone: {timezone_str}")
+
+    try:
+        # Validate using pytz
+        pytz.timezone(timezone_str)
+        # Save using google_services function
+        success = gs.set_user_timezone(user_id, timezone_str)
+        if success:
+            await update.message.reply_text(f"✅ Timezone set to `{timezone_str}` successfully!", parse_mode=ParseMode.MARKDOWN)
+            logger.info(f"Successfully set timezone for user {user_id}")
+            return ConversationHandler.END # End conversation
+        else:
+            await update.message.reply_text("Sorry, there was an error saving your timezone. Please try again.")
+            # Stay in the same state or end? Let's end for simplicity.
+            return ConversationHandler.END
+
+    except UnknownTimeZoneError:
+        logger.warning(f"Invalid timezone provided by user {user_id}: {timezone_str}")
+        await update.message.reply_text(
+            f"Sorry, '{timezone_str}' doesn't look like a valid IANA timezone.\n"
+            "Please use formats like 'Continent/City' (e.g., 'America/Los_Angeles'). "
+            "Check the list: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones\n"
+            "Or type /cancel."
+        )
+        return ASKING_TIMEZONE # Stay in the same state to allow retry
+    except Exception as e:
+        logger.error(f"Error processing timezone for user {user_id}: {e}", exc_info=True)
+        await update.message.reply_text("An unexpected error occurred. Please try again later or /cancel.")
+        return ConversationHandler.END
+
+async def cancel_timezone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Cancels the timezone setting conversation."""
+    user_id = update.effective_user.id
+    logger.info(f"User {user_id} cancelled timezone setting.")
+    await update.message.reply_text("Timezone setup cancelled.")
+    return ConversationHandler.END

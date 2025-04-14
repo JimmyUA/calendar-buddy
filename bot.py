@@ -7,9 +7,9 @@ from telegram.ext import (
     MessageHandler,
     CallbackQueryHandler,
     filters,
-    ContextTypes,
+    ContextTypes, ConversationHandler,
 )
-
+from handlers import ASKING_TIMEZONE
 import config # Load config first (initializes Firestore, etc.)
 import handlers # Import our handler functions
 
@@ -40,6 +40,17 @@ def main() -> None:
 
     # --- Create the Application ---
     application = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
+
+    # --- Setup /set_timezone conversation ---
+    timezone_conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("set_timezone", handlers.set_timezone_start)],
+        states={
+            ASKING_TIMEZONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.received_timezone)],
+        },
+        fallbacks=[CommandHandler("cancel", handlers.cancel_timezone)],
+         # Optional: Add conversation timeout, persistence etc.
+    )
+    application.add_handler(timezone_conv_handler)
 
     # --- Register Handlers ---
     # Commands

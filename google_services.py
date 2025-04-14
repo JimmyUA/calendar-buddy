@@ -4,6 +4,7 @@ import json
 import os
 import uuid
 from datetime import datetime, timezone
+import pytz # <--- ADD IMPORT
 
 # Google specific imports
 from google.oauth2.credentials import Credentials
@@ -15,6 +16,7 @@ from google.auth.transport.requests import Request
 # Firestore specific imports
 from google.cloud import firestore
 from google.api_core.exceptions import NotFound
+from pytz.exceptions import UnknownTimeZoneError
 
 import config # Import our config
 
@@ -24,8 +26,69 @@ logger = logging.getLogger(__name__)
 db = config.FIRESTORE_DB
 OAUTH_STATES_COLLECTION = db.collection('oauth_states') if db else None
 USER_TOKENS_COLLECTION = db.collection('user_tokens') if db else None
-
+# ---> NEW: Reference for preferences collection <---
+USER_PREFS_COLLECTION = db.collection(config.FS_COLLECTION_PREFS) if db else None
 # === Google Authentication & Firestore Persistence ===
+
+# --- Timezone Functions (Using NEW Collection) ---
+def set_user_timezone(user_id: int, timezone_str: str) -> bool:
+    """Stores the user's validated IANA timezone string in Firestore."""
+    # ---> Use USER_PREFS_COLLECTION <---
+    if not USER_PREFS_COLLECTION:
+        logger.error("Firestore USER_PREFS_COLLECTION unavailable for setting timezone.")
+        return False
+    user_doc_id = str(user_id) # Use user_id as document ID
+    doc_ref = USER_PREFS_COLLECTION.document(user_doc_id)
+    try:
+        # Validate timezone before storing
+        pytz.timezone(timezone_str)
+        # Store/Overwrite the timezone preference in the user's preference doc
+        # Using set() without merge is fine here if this doc only holds preferences
+        doc_ref.set({
+            'timezone': timezone_str,
+            'updated_at': firestore.SERVER_TIMESTAMP # Track last update
+        })
+        logger.info(f"Stored timezone '{timezone_str}' for user {user_id} in '{config.FS_COLLECTION_PREFS}'")
+        return True
+    except UnknownTimeZoneError:
+        logger.warning(f"Attempted to store invalid timezone '{timezone_str}' for user {user_id}")
+        return False
+    except Exception as e:
+        logger.error(f"Failed to store timezone for user {user_id}: {e}", exc_info=True)
+        return False
+
+def get_user_timezone_str(user_id: int) -> str | None:
+    """Retrieves the user's timezone string from Firestore."""
+    # ---> Use USER_PREFS_COLLECTION <---
+    if not USER_PREFS_COLLECTION:
+        logger.error("Firestore USER_PREFS_COLLECTION unavailable for getting timezone.")
+        return None
+    user_doc_id = str(user_id)
+    doc_ref = USER_PREFS_COLLECTION.document(user_doc_id)
+    try:
+        snapshot = doc_ref.get() # Fetch the preferences document
+
+        if snapshot.exists:
+            prefs_data = snapshot.to_dict()
+            if 'timezone' in prefs_data: # Check if the field exists
+                tz_str = prefs_data.get('timezone')
+                # Optional re-validation
+                try:
+                    pytz.timezone(tz_str)
+                    logger.debug(f"Found timezone '{tz_str}' for user {user_id} in '{config.FS_COLLECTION_PREFS}'")
+                    return tz_str
+                except UnknownTimeZoneError:
+                    logger.warning(f"Found invalid timezone '{tz_str}' in DB prefs for user {user_id}. Treating as unset.")
+                    return None
+            else:
+                logger.debug(f"Timezone field not found in prefs for user {user_id}")
+                return None
+        else:
+            logger.debug(f"User preferences document not found for user {user_id}, timezone not set.")
+            return None
+    except Exception as e:
+        logger.error(f"Error fetching timezone for user {user_id}: {e}", exc_info=True)
+        return None
 
 def get_google_auth_flow():
     """Creates and returns a Google OAuth Flow object."""
@@ -41,7 +104,6 @@ def get_google_auth_flow():
     except Exception as e:
         logger.error(f"Error creating OAuth flow: {e}", exc_info=True)
         return None
-
 
 def generate_oauth_state(user_id: int) -> str | None:
     """Generates a unique state token and stores the mapping in Firestore."""
