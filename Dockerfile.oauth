@@ -1,0 +1,34 @@
+# Use an official Python runtime as a parent image
+FROM python:3.11-slim
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1 \
+    # Cloud Run provides the PORT environment variable
+    PORT=8080 \
+    # Set APP_HOME for clarity
+    APP_HOME=/app
+
+# Set the working directory
+WORKDIR $APP_HOME
+
+# Install system dependencies if any were needed (usually not for this app)
+# RUN apt-get update && apt-get install -y --no-install-recommends some-package && rm -rf /var/lib/apt/lists/*
+
+# Install Gunicorn (or Waitress) - Add 'gunicorn' to requirements.txt OR install here
+# RUN pip install --no-cache-dir gunicorn
+
+# Copy dependency list
+COPY requirements.txt .
+
+# Install dependencies
+# Using --no-cache-dir makes the image smaller
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy the application code into the container
+# Copy essential files first if using multi-stage builds later
+COPY . $APP_HOME
+
+# Specify the command to run on container start
+# Use Gunicorn to run the Flask app (oauth_server:app)
+# Listens on the port specified by the PORT env variable ($PORT = 8080)
+CMD exec gunicorn --bind :$PORT --workers 1 --threads 8 --timeout 0 oauth_server:app

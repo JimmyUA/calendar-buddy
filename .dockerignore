@@ -1,0 +1,43 @@
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment
+.venv/
+venv/
+ENV/
+env/
+*.env
+
+# IDE and OS files
+.vscode/
+.idea/
+*.DS_Store
+*.suo
+*.user
+
+# Git files
+.git/
+.gitignore
+.gitattributes
+
+# Secrets / Local Config (Inject via Cloud Run env vars)
+.env
+*.db
+*.db-journal
+service-account.json # If you downloaded one
+
+# Docker files themselves if needed
+Dockerfile*
+docker-compose*
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Test files (optional)
+tests/
+*.pytest_cache/
