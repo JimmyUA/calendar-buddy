@@ -1,28 +1,33 @@
-python-telegram-bot[job-queue]>=20.6 # Use job queue extras for potential future use
-google-api-python-client
-google-auth-oauthlib
-google-auth-httplib2
-google-generativeai # For Gemini
-Flask
-python-dotenv
-httpx
-dateparser
-python-dateutil
-# Langchain Google GenAI integration (Let this pull the correct google-generativeai version)
-langchain-google-genai>=1.0.0 # Use a reasonable lower bound compatible with langchain 0.2+
+# requirements.txt
 
-# Optional: Langchain community components if needed
-langchain-community>=0.2.0
+# --- Telegram Bot ---
+python-telegram-bot>=20.6,<22.0 # Specify a reasonable upper bound if needed
 
-# REMOVE this line if it exists:
-# google-generativeai
+# --- Langchain Core & Integrations ---
+langchain>=0.2.0
+langchain-core>=0.2.0
+langchain-google-genai>=1.0.0 # Let this install compatible google-generativeai
+langchain-community>=0.2.0 # For ChatMessageHistory if used
 
-# Other libraries
-pytz
-python-dateutil
-google-cloud-firestore
-google-auth-oauthlib
-google-auth-httplib2
-Flask # Or FastAPI if used for oauth server
-python-dotenv
-httpx
+# --- Google Cloud & API Libraries ---
+google-cloud-firestore>=2.11.0 # For database
+google-api-python-client>=2.80.0 # For Calendar API
+google-auth-oauthlib>=1.0.0 # For OAuth flow
+google-auth-httplib2>=0.1.0 # For OAuth HTTP transport
+# google-generativeai # REMOVED - Let langchain-google-genai handle this dependency
+
+# --- Date/Time Handling ---
+pytz>=2023.3 # For timezone handling
+python-dateutil>=2.8.2 # For flexible date parsing
+
+# --- Web Server (for OAuth Callback) ---
+Flask>=2.3.0 # Or FastAPI
+gunicorn>=21.2.0 # WSGI server for Flask/FastAPI in Cloud Run
+
+# --- Utility ---
+python-dotenv>=1.0.0 # For loading .env file locally
+httpx>=0.24.0 # Often used by underlying libraries
+
+# --- Pydantic (Optional but recommended for Langchain Tool Schema stability) ---
+# Specify v1 explicitly if needed for compatibility, otherwise remove if v2 works
+pydantic<2,>=1.10 # Constrain to Pydantic v1.x
