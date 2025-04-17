@@ -31,6 +31,24 @@ USER_TOKENS_COLLECTION = db.collection('user_tokens') if db else None
 # ---> NEW: Reference for preferences collection <---
 USER_PREFS_COLLECTION = db.collection(config.FS_COLLECTION_PREFS) if db else None
 # === Google Authentication & Firestore Persistence ===
+# --- NEW: Get Single Event by ID ---
+async def get_calendar_event_by_id(user_id: int, event_id: str) -> dict | None:
+    """Fetches a single calendar event by its ID."""
+    service = _build_calendar_service_client(user_id)
+    if not service: return None
+    logger.info(f"GS: Fetching event details for ID {event_id} for user {user_id}")
+    try:
+        event = service.events().get(calendarId='primary', eventId=event_id).execute()
+        return event # Returns the full event resource
+    except HttpError as error:
+        logger.error(f"GS: API error fetching event {event_id} for {user_id}: {error}")
+        if error.resp.status == 404 or error.resp.status == 410: # Not Found or Gone
+             logger.warning(f"GS: Event {event_id} not found for user {user_id}.")
+        elif error.resp.status == 401: delete_user_token(user_id) # Clear token on auth error
+        return None
+    except Exception as e:
+        logger.error(f"GS: Unexpected error fetching event {event_id} for {user_id}: {e}", exc_info=True)
+        return None
 
 # --- Timezone Functions (Using NEW Collection) ---
 def set_user_timezone(user_id: int, timezone_str: str) -> bool:

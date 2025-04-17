@@ -14,6 +14,7 @@ import config
 import google_services as gs # For Calendar and Auth services
 import llm_service          # Import LLM Service
 from agent import initialize_agent
+from utils import _format_event_time
 
 logger = logging.getLogger(__name__)
 
@@ -24,51 +25,6 @@ ASKING_TIMEZONE = range(1)
 # === Helper Function ===
 
 # === Helper Function ===
-
-def _format_event_time(event: dict, user_tz: pytz.BaseTzInfo) -> str:
-    """Formats event start/end time nicely for display in user's timezone."""
-    start_data = event.get('start', {}) # Use .get() for safety
-    end_data = event.get('end', {})   # Use .get() for safety
-
-    start_str = start_data.get('dateTime', start_data.get('date'))
-    end_str = end_data.get('dateTime', end_data.get('date'))
-
-    # ===> ADD Check for None/Empty strings <===
-    if not start_str:
-        logger.warning(f"Event missing start date/time info. Event ID: {event.get('id')}")
-        return "[Unknown Start Time]"
-    # ===> END Check <===
-
-    try:
-        if 'date' in start_data: # All day event
-            # Check end date for multi-day all-day events
-            end_dt_str = end_data.get('date')
-            start_dt = dateutil_parser.isoparse(start_str).date()
-            if end_dt_str:
-                 # Google API end date for all-day is exclusive, subtract a day for display
-                end_dt = dateutil_parser.isoparse(end_dt_str).date() - timedelta(days=1)
-                if end_dt > start_dt: # Multi-day all-day event
-                    return f"{start_dt.strftime('%a, %b %d')} - {end_dt.strftime('%a, %b %d')} (All day)"
-            # Single all-day event
-            return f"{start_dt.strftime('%a, %b %d')} (All day)"
-        else: # Timed event
-             # Check end_str existence before parsing
-             if not end_str:
-                 logger.warning(f"Timed event missing end time. Event ID: {event.get('id')}")
-                 end_str = start_str # Fallback to start time if end is missing (shouldn't happen)
-
-             start_dt_aware = dateutil_parser.isoparse(start_str).astimezone(user_tz)
-             end_dt_aware = dateutil_parser.isoparse(end_str).astimezone(user_tz)
-
-             start_fmt = start_dt_aware.strftime('%a, %b %d, %Y at %I:%M %p %Z') # %Z shows tz abbr
-             end_fmt = end_dt_aware.strftime('%I:%M %p %Z')
-             if start_dt_aware.date() != end_dt_aware.date():
-                 end_fmt = end_dt_aware.strftime('%b %d, %Y %I:%M %p %Z')
-             return f"{start_fmt} - {end_fmt}"
-    except Exception as e:
-        logger.error(f"Error parsing/formatting event time: {e}. Event ID: {event.get('id')}, Start: '{start_str}', End: '{end_str}'", exc_info=True) # Log full traceback
-        # Fallback to showing raw start time string if formatting fails
-        return f"{start_str} [Error Formatting]"
 async def _get_user_tz_or_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> pytz.BaseTzInfo | None:
     """Gets user timezone object or prompts them to set it, returning None if prompt sent."""
     user_id = update.effective_user.id
@@ -456,8 +412,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         agent_response = "Sorry, an error occurred while processing your request with the agent."
         chat_history.pop() # Remove user message if agent failed
 
-    # 6. Send response and update history
-    await update.message.reply_text(agent_response)
+        # --- Send Response & Check for Pending Actions ---
+    reply_markup = None
+    # Check if a pending action was stored by a tool during the agent run
+    if user_id in config.pending_events:
+        logger.info(f"Pending event create found for user {user_id}. Sending confirmation buttons.")
+        keyboard = [[InlineKeyboardButton("✅ Confirm Create", callback_data="confirm_event_create"),
+                     InlineKeyboardButton("❌ Cancel Create", callback_data="cancel_event_create")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        # Agent response should already be the confirmation question from the tool
+    elif user_id in config.pending_deletions:
+        logger.info(f"Pending event delete found for user {user_id}. Sending confirmation buttons.")
+        keyboard = [[InlineKeyboardButton("✅ Yes, Delete", callback_data="confirm_event_delete"),
+                     InlineKeyboardButton("❌ No, Cancel", callback_data="cancel_event_delete")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        # Agent response should already be the confirmation question from the tool
+
+    # Send the agent's final text response, potentially with buttons
+    await update.message.reply_text(agent_response, reply_markup=reply_markup,
+                                    parse_mode=ParseMode.HTML)  # Use HTML for pending action summaries if needed
     if agent_response and "error" not in agent_response.lower(): # Avoid saving error messages as model response
         chat_history.append({'role': 'model', 'content': agent_response})
 
