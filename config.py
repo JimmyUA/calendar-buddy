@@ -44,8 +44,10 @@ pending_deletions = {}  # {user_id: {'event_id': '...', 'summary': '...'}} for d
 # --- Basic Validation ---
 if not TELEGRAM_BOT_TOKEN:
     raise ValueError("Missing environment variable: TELEGRAM_BOT_TOKEN")
-if not GOOGLE_CLIENT_SECRETS_FILE or not os.path.exists(GOOGLE_CLIENT_SECRETS_FILE):
-     raise ValueError(f"Missing or invalid GOOGLE_CLIENT_SECRETS_FILE: {GOOGLE_CLIENT_SECRETS_FILE}")
+GOOGLE_CLIENT_SECRETS_CONTENT = os.getenv("GOOGLE_CLIENT_SECRETS_CONTENT") # Rename env var for clarity
+if not GOOGLE_CLIENT_SECRETS_CONTENT:
+     # Change the error message if using content directly
+     raise ValueError("Missing environment variable: GOOGLE_CLIENT_SECRETS_CONTENT")
 # API Key is optional for LLM but features will be disabled
 if not GOOGLE_API_KEY:
     logger.warning("Config: Missing GOOGLE_API_KEY. LLM features will be disabled.")

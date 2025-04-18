@@ -181,46 +181,31 @@ async def search_calendar_events(user_id: int, query: str, time_min_iso: str, ti
     except Exception as e: logger.error(f"GS: Unexpected error searching events for {user_id}: {e}", exc_info=True); return None
 
 def get_google_auth_flow():
-    """Creates OAuth Flow, fetching secrets from Secret Manager."""
-    # Fetch secret content from Secret Manager
-    secret_name = "oauth-client-secrets"
-    project_id = os.getenv('GOOGLE_CLOUD_PROJECT') # Get project ID from env
-    if not project_id: # Fallback or get from config/metadata server
-         # You might need to explicitly get the project ID here
-         # For Cloud Run, it's usually available as an environment variable
-         logger.error("GOOGLE_CLOUD_PROJECT environment variable not set.")
-         return None
-
-    client_secrets_content = None
-    try:
-        client = secretmanager.SecretManagerServiceClient()
-        name = f"projects/{project_id}/secrets/{secret_name}/versions/latest"
-        response = client.access_secret_version(request={"name": name})
-        client_secrets_content = response.payload.data.decode("UTF-8")
-        logger.info(f"Successfully fetched secret '{secret_name}'")
-    except Exception as e:
-        logger.error(f"Failed to fetch secret '{secret_name}': {e}", exc_info=True)
+    """Creates OAuth Flow using config from environment variable."""
+    client_secrets_content = os.getenv("GOOGLE_CLIENT_SECRETS_CONTENT") # Use the content env var
+    if not client_secrets_content:
+        logger.error("GOOGLE_CLIENT_SECRETS_CONTENT environment variable not set.")
         return None
 
-    if not client_secrets_content:
-         logger.error("Fetched client secrets content is empty.")
-         return None
-
     try:
-        # Load the fetched JSON content into a dictionary
-        client_config = json.loads(client_secrets_content)
+        client_config_dict = json.loads(client_secrets_content)
+        # Determine key ('web' or 'installed') - IMPORTANT
+        flow_key = "web" if "web" in client_config_dict else "installed"
+        if flow_key not in client_config_dict:
+            logger.error("Client secrets content missing 'web' or 'installed' key.")
+            return None
 
-        # Use Flow.from_client_config with the dictionary
+        # Use from_client_config
         return Flow.from_client_config(
-            client_config, # Pass the dictionary here
+            client_config_dict, # Pass the loaded dictionary
             scopes=config.GOOGLE_CALENDAR_SCOPES,
             redirect_uri=config.OAUTH_REDIRECT_URI
         )
     except json.JSONDecodeError as e:
-         logger.error(f"Failed to parse client secrets JSON fetched from Secret Manager: {e}")
+         logger.error(f"Failed to parse client secrets JSON from env var: {e}")
          return None
     except Exception as e:
-        logger.error(f"Error creating OAuth flow from fetched config: {e}", exc_info=True)
+        logger.error(f"Error creating OAuth flow from env var config: {e}", exc_info=True)
         return None
 
 def generate_oauth_state(user_id: int) -> str | None:
