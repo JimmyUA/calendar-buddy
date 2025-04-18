@@ -5,6 +5,7 @@ import os
 import uuid
 from datetime import datetime, timezone, timedelta # Ensure timedelta is imported
 from dateutil import parser as dateutil_parser
+from google.cloud import secretmanager # Import Secret Manager client
 
 import pytz # <--- ADD IMPORT
 
@@ -180,18 +181,46 @@ async def search_calendar_events(user_id: int, query: str, time_min_iso: str, ti
     except Exception as e: logger.error(f"GS: Unexpected error searching events for {user_id}: {e}", exc_info=True); return None
 
 def get_google_auth_flow():
-    """Creates and returns a Google OAuth Flow object."""
-    if not config.GOOGLE_CLIENT_SECRETS_FILE or not os.path.exists(config.GOOGLE_CLIENT_SECRETS_FILE):
-        logger.error(f"Client secrets file missing or invalid: {config.GOOGLE_CLIENT_SECRETS_FILE}")
-        return None
+    """Creates OAuth Flow, fetching secrets from Secret Manager."""
+    # Fetch secret content from Secret Manager
+    secret_name = "oauth-client-secrets"
+    project_id = os.getenv('GOOGLE_CLOUD_PROJECT') # Get project ID from env
+    if not project_id: # Fallback or get from config/metadata server
+         # You might need to explicitly get the project ID here
+         # For Cloud Run, it's usually available as an environment variable
+         logger.error("GOOGLE_CLOUD_PROJECT environment variable not set.")
+         return None
+
+    client_secrets_content = None
     try:
-        return Flow.from_client_secrets_file(
-            config.GOOGLE_CLIENT_SECRETS_FILE,
+        client = secretmanager.SecretManagerServiceClient()
+        name = f"projects/{project_id}/secrets/{secret_name}/versions/latest"
+        response = client.access_secret_version(request={"name": name})
+        client_secrets_content = response.payload.data.decode("UTF-8")
+        logger.info(f"Successfully fetched secret '{secret_name}'")
+    except Exception as e:
+        logger.error(f"Failed to fetch secret '{secret_name}': {e}", exc_info=True)
+        return None
+
+    if not client_secrets_content:
+         logger.error("Fetched client secrets content is empty.")
+         return None
+
+    try:
+        # Load the fetched JSON content into a dictionary
+        client_config = json.loads(client_secrets_content)
+
+        # Use Flow.from_client_config with the dictionary
+        return Flow.from_client_config(
+            client_config, # Pass the dictionary here
             scopes=config.GOOGLE_CALENDAR_SCOPES,
             redirect_uri=config.OAUTH_REDIRECT_URI
         )
+    except json.JSONDecodeError as e:
+         logger.error(f"Failed to parse client secrets JSON fetched from Secret Manager: {e}")
+         return None
     except Exception as e:
-        logger.error(f"Error creating OAuth flow: {e}", exc_info=True)
+        logger.error(f"Error creating OAuth flow from fetched config: {e}", exc_info=True)
         return None
 
 def generate_oauth_state(user_id: int) -> str | None:

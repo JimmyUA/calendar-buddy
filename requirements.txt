@@ -31,3 +31,4 @@ httpx>=0.24.0 # Often used by underlying libraries
 # --- Pydantic (Optional but recommended for Langchain Tool Schema stability) ---
 # Specify v1 explicitly if needed for compatibility, otherwise remove if v2 works
 pydantic<2,>=1.10 # Constrain to Pydantic v1.x
+google-cloud-secret-manager>=2.16.0 # For secret management
