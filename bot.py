@@ -1,5 +1,7 @@
 # bot.py
 import logging
+import threading # Import threading
+from flask import Flask # Import Flask
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -23,6 +25,25 @@ logging.getLogger("googleapiclient.discovery_cache").setLevel(logging.ERROR)
 
 logger = logging.getLogger(__name__)
 
+health_app = Flask(__name__)
+
+@health_app.route('/', methods=['GET']) # Use /health endpoint
+def health_check():
+    # Basic check - just return OK if the server is running
+    # More advanced checks could verify if the bot polling thread is alive
+    return "OK", 200
+
+def run_health_server():
+    # Run Flask app on the port Cloud Run expects
+    # Default to 8080 if PORT env var isn't set (for local testing)
+    port = int(config.os.getenv('PORT', 8080))
+    # Use '0.0.0.0' to be accessible within the container network
+    logger.info(f"Starting health check server on port {port}...")
+    # Turn off Flask's default logging if too noisy, rely on root logger
+    log = logging.getLogger('werkzeug')
+    log.setLevel(logging.WARNING)
+    health_app.run(host='0.0.0.0', port=port, use_reloader=False)
+
 def main() -> None:
     """Start the bot."""
     if not config.TELEGRAM_BOT_TOKEN:
@@ -37,6 +58,12 @@ def main() -> None:
     #     logger.warning("LLM Service not available. Some features will be disabled.")
 
     logger.info("Starting bot...")
+
+    # --- Start Health Check Server in a separate thread ---
+    # Make the thread a daemon thread so it exits when the main program exits
+    health_thread = threading.Thread(target=run_health_server, daemon=True)
+    health_thread.start()
+    logger.info("Health check server thread started.")
 
     # --- Create the Application ---
     application = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()

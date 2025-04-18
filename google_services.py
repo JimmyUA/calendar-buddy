@@ -181,14 +181,8 @@ async def search_calendar_events(user_id: int, query: str, time_min_iso: str, ti
     except Exception as e: logger.error(f"GS: Unexpected error searching events for {user_id}: {e}", exc_info=True); return None
 
 def get_google_auth_flow():
-    """Creates OAuth Flow using config from environment variable."""
-    client_secrets_content = os.getenv("GOOGLE_CLIENT_SECRETS_CONTENT") # Use the content env var
-    if not client_secrets_content:
-        logger.error("GOOGLE_CLIENT_SECRETS_CONTENT environment variable not set.")
-        return None
-
     try:
-        client_config_dict = json.loads(client_secrets_content)
+        client_config_dict = json.loads(config.GOOGLE_CLIENT_SECRETS_CONTENT)
         # Determine key ('web' or 'installed') - IMPORTANT
         flow_key = "web" if "web" in client_config_dict else "installed"
         if flow_key not in client_config_dict:
