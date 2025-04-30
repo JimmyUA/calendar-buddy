@@ -76,6 +76,12 @@ def oauth2callback():
 
     try:
         logger.info(f"Exchanging authorization code for tokens for user {user_id}...")
+        # ---> Add Logging Here <---
+        logger.debug(f"Using code: {code[:10]}...") # Log first few chars of code
+        logger.debug(f"Flow Client ID: {flow.client_config.get('client_id', 'MISSING')}")
+        logger.debug(f"Flow Redirect URI: {flow.redirect_uri}") # Check the URI the flow object has
+        # Be CAREFUL logging secrets, even in debug. Avoid logging flow.client_config['client_secret']
+        # ---> End Logging <---
         # Specify the redirect_uri again when fetching token
         flow.fetch_token(code=code)
         credentials = flow.credentials # Contains access and refresh tokens
