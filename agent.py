@@ -27,7 +27,7 @@ def initialize_agent(user_id: int, user_timezone_str: str, chat_history: list) -
 
     # 1. Initialize LLM
     try:
-        llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash-001", temperature=0.1, convert_system_message_to_human=True)
+        llm = ChatGoogleGenerativeAI(model="gemini-2.5-pro-preview-03-25", temperature=0.1, convert_system_message_to_human=True)
     except Exception as e:
         logger.error(f"Failed to initialize LLM: {e}", exc_info=True); raise
 
