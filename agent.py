@@ -27,7 +27,7 @@ def initialize_agent(user_id: int, user_timezone_str: str, chat_history: list) -
 
     # 1. Initialize LLM
     try:
-        llm = ChatGoogleGenerativeAI(model="gemini-2.5-pro-preview-03-25", temperature=0.1, convert_system_message_to_human=True)
+        llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash-001", temperature=0.1, convert_system_message_to_human=True)
     except Exception as e:
         logger.error(f"Failed to initialize LLM: {e}", exc_info=True); raise
 
@@ -50,13 +50,13 @@ def initialize_agent(user_id: int, user_timezone_str: str, chat_history: list) -
     Use the following format:
 
     Question: the input question you must answer
-    Thought: you should always think about what to do to fulfill the user's request. If the request involves specific calendar actions, identify the correct tool and the necessary natural language input for it based on the conversation. If searching before deleting, note the event ID returned by the search tool.
-    Action: the action to take, should be one of [{", ".join([t.name for t in tools])}]
-    Action Input: The natural language query or description needed by the tool (e.g., for 'read_calendar_events', provide 'tomorrow'; for 'create_calendar_event', provide 'Meeting with Bob 3pm'; for 'search_calendar_events', provide 'project alpha meeting'; for 'delete_calendar_event', provide the specific event ID from a previous search). Do NOT provide JSON or structured data here, just the text input for the tool.
-    Observation: the result of the action
+    Thought: Step-by-step thinking process. If deleting, first use 'search_calendar_events' to find the event ID. Then, use 'delete_calendar_event' with ONLY the event ID. If creating, use 'create_calendar_event' with the natural language description.
+    Action: the action to take, one of [{", ".join([t.name for t in tools])}]
+    Action Input: The required input for the action (natural language for create/read/search, event ID for delete).
+    Observation: the result of the action. **IMPORTANT: If the Observation from 'create_calendar_event' or 'delete_calendar_event' is a question asking for confirmation (e.g., "Should I add this..." or "Should I delete this..."), your job is done for this step. Your Final Answer MUST be exactly that confirmation question.** Do not try to call the tool again or re-answer the original question in this case.
     ... (this Thought/Action/Action Input/Observation can repeat N times)
-    Thought: I now know the final answer based on the tool usage or conversation.
-    Final Answer: the final answer to the original input question
+    Thought: I have the information needed OR the tool returned a confirmation question.
+    Final Answer: the final answer to the original input question, OR the exact confirmation question returned by the create/delete tool.
 
     Begin!
 
@@ -114,6 +114,7 @@ def initialize_agent(user_id: int, user_timezone_str: str, chat_history: list) -
         memory=memory,
         verbose=True,
         handle_parsing_errors="Check your output and make sure it conforms to the ReAct format!",
+        max_iterations=6,
     )
 
     return agent_executor
