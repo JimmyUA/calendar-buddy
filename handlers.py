@@ -5,23 +5,25 @@ from dateutil import parser as dateutil_parser
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram.constants import ParseMode
-import re # Keep for potential simple logic
+import re  # Keep for potential simple logic
 # Timezone libraries
 import pytz
 from pytz.exceptions import UnknownTimeZoneError
 
 import config
-import google_services as gs # For Calendar and Auth services
-import llm_service          # Import LLM Service
+import google_services as gs  # For Calendar and Auth services
+import llm_service  # Import LLM Service
 from agent import initialize_agent
 from utils import _format_event_time
 
 logger = logging.getLogger(__name__)
 
 # Define history constants
-MAX_HISTORY_TURNS = 10 # Remember last 10 back-and-forth turns
+MAX_HISTORY_TURNS = 10  # Remember last 10 back-and-forth turns
 MAX_HISTORY_MESSAGES = MAX_HISTORY_TURNS * 2
 ASKING_TIMEZONE = range(1)
+
+
 # === Helper Function ===
 
 # === Helper Function ===
@@ -36,8 +38,10 @@ async def _get_user_tz_or_prompt(update: Update, context: ContextTypes.DEFAULT_T
             logger.warning(f"Invalid timezone '{tz_str}' found in DB for user {user_id}. Prompting.")
             # Optionally delete invalid tz from DB here
     # If no valid timezone found
-    await update.message.reply_text("Please set your timezone first using the /set_timezone command so I can understand times correctly.")
+    await update.message.reply_text(
+        "Please set your timezone first using the /set_timezone command so I can understand times correctly.")
     return None
+
 
 # === Core Action Handlers (Internal) ===
 
@@ -56,7 +60,7 @@ async def _handle_general_chat(update: Update, context: ContextTypes.DEFAULT_TYP
     history.append({'role': 'user', 'content': text})
 
     # 3. Call LLM service with history
-    response_text = await llm_service.get_chat_response(history) # Pass the history
+    response_text = await llm_service.get_chat_response(history)  # Pass the history
 
     # 4. Process response and update history
     if response_text:
@@ -77,13 +81,108 @@ async def _handle_general_chat(update: Update, context: ContextTypes.DEFAULT_TYP
         context.user_data['llm_history'] = history[-MAX_HISTORY_MESSAGES:]
         # Alternative: history = history[-MAX_HISTORY_MESSAGES:] # Reassign if not using user_data directly
 
+
+def parse_and_format_event_time(event_data: dict, user_tz: pytz.BaseTzInfo) -> dict | None:
+    """
+    Parses Google Calendar event time data and returns structured, timezone-aware info.
+
+    Returns:
+        A dictionary like:
+        {
+            'is_all_day': bool,
+            'start_dt': datetime, # Timezone-aware in user_tz
+            'end_dt': datetime,   # Timezone-aware in user_tz
+            'time_str': str,    # Pre-formatted basic time string
+            'duration_str': str # Optional: Human-readable duration
+        }
+        or None if parsing fails.
+    """
+    start_info = event_data.get('start', {})
+    end_info = event_data.get('end', {})
+
+    start_str = start_info.get('dateTime', start_info.get('date'))
+    end_str = end_info.get('dateTime', end_info.get('date'))
+
+    if not start_str:
+        logger.warning(f"Event missing start date/time info. Event ID: {event_data.get('id')}")
+        return None
+
+    try:
+        is_all_day = 'date' in start_info
+        start_dt_aware = None
+        end_dt_aware = None
+        time_str = ""
+        duration_str = ""
+
+        if is_all_day:
+            start_dt_naive = dateutil_parser.isoparse(start_str).date()
+            # For calculation/comparison, treat all-day start/end as start of day in user's TZ
+            start_dt_aware = user_tz.localize(datetime.combine(start_dt_naive, datetime.min.time()))
+            # Google's all-day end date is exclusive
+            end_dt_naive = dateutil_parser.isoparse(end_info.get('date', start_str)).date()  # Use start if end missing
+            # Treat end as start of the *next* day in UTC for duration calc, then convert
+            end_dt_for_calc = datetime.combine(end_dt_naive, datetime.min.time())
+            end_dt_aware = user_tz.localize(end_dt_for_calc)  # End is start of next day
+
+            num_days = (end_dt_naive - start_dt_naive).days
+            if num_days <= 1:
+                time_str = f"{start_dt_naive.strftime('%a, %b %d')} (All Day)"
+                duration_str = "All day"
+            else:
+                # Display end date is one day prior to exclusive date
+                display_end_dt = end_dt_naive - timedelta(days=1)
+                time_str = f"{start_dt_naive.strftime('%a, %b %d')} - {display_end_dt.strftime('%a, %b %d')} (All Day)"
+                duration_str = f"{num_days} days"
+
+        else:  # Timed event
+            if not end_str: end_str = start_str  # Should not happen, but fallback
+
+            start_dt_aware = dateutil_parser.isoparse(start_str).astimezone(user_tz)
+            end_dt_aware = dateutil_parser.isoparse(end_str).astimezone(user_tz)
+
+            start_fmt = start_dt_aware.strftime('%I:%M %p')  # Time only
+            end_fmt = end_dt_aware.strftime('%I:%M %p %Z')  # Time + Zone
+
+            if start_dt_aware.date() == end_dt_aware.date():
+                time_str = f"{start_dt_aware.strftime('%a, %b %d')}, {start_fmt} - {end_fmt}"
+            else:
+                # Multi-day timed event
+                start_fmt_full = start_dt_aware.strftime('%a, %b %d, %I:%M %p %Z')
+                end_fmt_full = end_dt_aware.strftime('%a, %b %d, %I:%M %p %Z')
+                time_str = f"{start_fmt_full} - {end_fmt_full}"
+
+            # Calculate duration
+            delta = relativedelta(end_dt_aware, start_dt_aware)
+            parts = []
+            if delta.years: parts.append(f"{delta.years}y")
+            if delta.months: parts.append(f"{delta.months}m")
+            if delta.days: parts.append(f"{delta.days}d")
+            if delta.hours: parts.append(f"{delta.hours}h")
+            if delta.minutes: parts.append(f"{delta.minutes}min")
+            duration_str = " ".join(parts) if parts else ""
+
+        return {
+            'is_all_day': is_all_day,
+            'start_dt': start_dt_aware,
+            'end_dt': end_dt_aware,
+            'time_str': time_str.strip(),
+            'duration_str': duration_str.strip()
+        }
+
+    except Exception as e:
+        logger.error(
+            f"Error parsing/formatting event time: {e}. Event ID: {event_data.get('id')}, Start: '{start_str}', End: '{end_str}'",
+            exc_info=True)
+        return None  # Indicate failure
+
+
 async def _handle_calendar_summary(update: Update, context: ContextTypes.DEFAULT_TYPE, parameters: dict):
     """Handles CALENDAR_SUMMARY intent using user's timezone."""
     user_id = update.effective_user.id
     logger.info(f"Handling CALENDAR_SUMMARY for user {user_id}")
 
     user_tz = await _get_user_tz_or_prompt(update, context)
-    if not user_tz: return # Stop if user needs to set timezone
+    if not user_tz: return  # Stop if user needs to set timezone
 
     time_period_str = parameters.get("time_period", "today")
     await update.message.reply_text(f"Okay, checking your calendar for '{time_period_str}'...")
@@ -105,20 +204,23 @@ async def _handle_calendar_summary(update: Update, context: ContextTypes.DEFAULT
             # For calculating *local* start/end of day, we need user_tz
             # Example: If user asks for "today"
             if time_period_str.lower() == "today":
-                 start_date = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
-                 end_date = now_local.replace(hour=23, minute=59, second=59, microsecond=999999)
+                start_date = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+                end_date = now_local.replace(hour=23, minute=59, second=59, microsecond=999999)
             # Need more sophisticated logic for "next week", "this weekend" based on user_tz
 
-        except ValueError as e: logger.error(...); start_date = None
+        except ValueError as e:
+            logger.error(...); start_date = None
 
     if start_date is None or end_date is None:
         logger.warning(f"Date range parsing failed/fallback for '{time_period_str}'. Using local today.")
-        await update.message.reply_text(f"Had trouble with '{time_period_str}', showing today ({now_local.strftime('%Y-%m-%d')}) instead.")
+        await update.message.reply_text(
+            f"Had trouble with '{time_period_str}', showing today ({now_local.strftime('%Y-%m-%d')}) instead.")
         start_date = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
         end_date = now_local.replace(hour=23, minute=59, second=59, microsecond=999999)
         display_period_str = f"today ({now_local.strftime('%Y-%m-%d')})"
 
-    if end_date <= start_date: end_date = start_date.replace(hour=23, minute=59, second=59, microsecond=999999); # Ensure valid range
+    if end_date <= start_date: end_date = start_date.replace(hour=23, minute=59, second=59,
+                                                             microsecond=999999);  # Ensure valid range
 
     # 2. Fetch events (using the calculated datetimes, which are now timezone-aware)
     events = await gs.get_calendar_events(user_id, time_min=start_date, time_max=end_date)
@@ -129,10 +231,9 @@ async def _handle_calendar_summary(update: Update, context: ContextTypes.DEFAULT
 
     summary_lines = [f"🗓️ Events for {display_period_str} (Times in {user_tz.zone}):"]
     for event in events:
-        time_str = _format_event_time(event, user_tz) # Pass user_tz for formatting
+        time_str = _format_event_time(event, user_tz)  # Pass user_tz for formatting
         summary_lines.append(f"- *{event.get('summary', 'No Title')}* ({time_str})")
     await update.message.reply_text("\n".join(summary_lines), parse_mode=ParseMode.MARKDOWN)
-
 
 
 async def _handle_calendar_create(update: Update, context: ContextTypes.DEFAULT_TYPE, parameters: dict):
@@ -157,7 +258,7 @@ async def _handle_calendar_create(update: Update, context: ContextTypes.DEFAULT_
     # 2. Prepare confirmation (parsing dates needs care)
     try:
         summary = event_details.get('summary')
-        start_str = event_details.get('start_time') # ISO string from LLM (should have offset)
+        start_str = event_details.get('start_time')  # ISO string from LLM (should have offset)
         if not summary or not start_str: raise ValueError("Missing essential details")
 
         # Parse ISO string into aware datetime object
@@ -178,12 +279,12 @@ async def _handle_calendar_create(update: Update, context: ContextTypes.DEFAULT_
         google_event_data = {
             'summary': summary, 'location': event_details.get('location'),
             'description': event_details.get('description'),
-            'start': {'dateTime': start_dt.isoformat(), 'timeZone': user_tz.zone}, # Add IANA timeZone
-            'end': {'dateTime': final_end_dt.isoformat(), 'timeZone': user_tz.zone}, # Add IANA timeZone
+            'start': {'dateTime': start_dt.isoformat(), 'timeZone': user_tz.zone},  # Add IANA timeZone
+            'end': {'dateTime': final_end_dt.isoformat(), 'timeZone': user_tz.zone},  # Add IANA timeZone
         }
 
         # Format confirmation message using the parsed (and potentially timezone-converted) times
-        start_confirm = start_dt.astimezone(user_tz).strftime('%a, %b %d, %Y at %I:%M %p %Z') # Display in local TZ
+        start_confirm = start_dt.astimezone(user_tz).strftime('%a, %b %d, %Y at %I:%M %p %Z')  # Display in local TZ
         end_confirm = final_end_dt.astimezone(user_tz).strftime('%a, %b %d, %Y at %I:%M %p %Z')
         confirm_text = f"Create this event?\n\n" \
                        f"<b>Summary:</b> {summary}\n<b>Start:</b> {start_confirm}\n" \
@@ -191,14 +292,15 @@ async def _handle_calendar_create(update: Update, context: ContextTypes.DEFAULT_
                        f"<b>Loc:</b> {event_details.get('location', 'N/A')}"
 
         config.pending_events[user_id] = google_event_data
-        keyboard = [[ InlineKeyboardButton("✅ Confirm", callback_data="confirm_event_create"),
-                      InlineKeyboardButton("❌ Cancel", callback_data="cancel_event_create") ]]
+        keyboard = [[InlineKeyboardButton("✅ Confirm", callback_data="confirm_event_create"),
+                     InlineKeyboardButton("❌ Cancel", callback_data="cancel_event_create")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await update.message.reply_html(confirm_text, reply_markup=reply_markup)
 
     except Exception as e:
         logger.error(f"Error preparing create confirmation for user {user_id}: {e}", exc_info=True)
-        await update.message.reply_text("Sorry, I had trouble processing the event details (e.g., date/time format). Please try phrasing it differently.")
+        await update.message.reply_text(
+            "Sorry, I had trouble processing the event details (e.g., date/time format). Please try phrasing it differently.")
 
 
 async def _handle_calendar_delete(update: Update, context: ContextTypes.DEFAULT_TYPE, parameters: dict):
@@ -219,16 +321,22 @@ async def _handle_calendar_delete(update: Update, context: ContextTypes.DEFAULT_
     parsed_range = await llm_service.parse_date_range_llm(event_description, now_local.isoformat())
     search_start, search_end = None, None
     if parsed_range:
-        try: search_start = dateutil_parser.isoparse(parsed_range['start_iso']); search_end = dateutil_parser.isoparse(parsed_range['end_iso']); search_start-=timedelta(minutes=1); search_end+=timedelta(minutes=1)
-        except ValueError: search_start = None
-    if not search_start: now = datetime.now(timezone.utc); search_start = now.replace(hour=0, minute=0, second=0, microsecond=0); search_end = now + timedelta(days=3)
+        try:
+            search_start = dateutil_parser.isoparse(parsed_range['start_iso']); search_end = dateutil_parser.isoparse(
+                parsed_range['end_iso']); search_start -= timedelta(minutes=1); search_end += timedelta(minutes=1)
+        except ValueError:
+            search_start = None
+    if not search_start: now = datetime.now(timezone.utc); search_start = now.replace(hour=0, minute=0, second=0,
+                                                                                      microsecond=0); search_end = now + timedelta(
+        days=3)
     logger.info(f"Delete search window: {search_start.isoformat()} to {search_end.isoformat()}")
 
     # 2. Fetch potential events (gs)
     potential_events = await gs.get_calendar_events(user_id, time_min=search_start, time_max=search_end, max_results=25)
 
     if potential_events is None: await update.message.reply_text("Sorry, couldn't search your calendar now."); return
-    if not potential_events: await update.message.reply_text(f"Didn't find any events around that time matching '{event_description[:50]}...'."); return
+    if not potential_events: await update.message.reply_text(
+        f"Didn't find any events around that time matching '{event_description[:50]}...'."); return
 
     # 3. Ask LLM service to find the best match
     logger.info(f"Asking LLM to match '{event_description}' against {len(potential_events)} candidates.")
@@ -240,30 +348,33 @@ async def _handle_calendar_delete(update: Update, context: ContextTypes.DEFAULT_
     # 4. Process LLM result
     match_type = match_result.get('match_type')
     if match_type == 'NONE':
-        await update.message.reply_text(f"Couldn't confidently match an event to '{event_description[:50]}...'. Can you be more specific?")
+        await update.message.reply_text(
+            f"Couldn't confidently match an event to '{event_description[:50]}...'. Can you be more specific?")
     elif match_type == 'SINGLE':
         event_index = match_result.get('event_index')
         if not (isinstance(event_index, int) and 0 <= event_index < len(potential_events)):
-             logger.error(f"Handler received invalid event_index {event_index} from LLM matching.")
-             await update.message.reply_text("Sorry, internal error identifying the matched event.")
-             return
+            logger.error(f"Handler received invalid event_index {event_index} from LLM matching.")
+            await update.message.reply_text("Sorry, internal error identifying the matched event.")
+            return
 
         event_to_delete = potential_events[event_index]
         event_id = event_to_delete.get('id')
         event_summary = event_to_delete.get('summary', 'No Title')
         time_confirm = _format_event_time(event_to_delete, user_tz)
 
-        if not event_id: logger.error(f"Matched event missing ID: {event_to_delete}"); await update.message.reply_text("Sorry, internal error retrieving event ID."); return
+        if not event_id: logger.error(f"Matched event missing ID: {event_to_delete}"); await update.message.reply_text(
+            "Sorry, internal error retrieving event ID."); return
 
         confirm_text = f"Delete this event?\n\n<b>{event_summary}</b>\n({time_confirm})"
         config.pending_deletions[user_id] = {'event_id': event_id, 'summary': event_summary}
-        keyboard = [[ InlineKeyboardButton("✅ Yes, Delete", callback_data="confirm_event_delete"),
-                      InlineKeyboardButton("❌ No, Cancel", callback_data="cancel_event_delete") ]]
+        keyboard = [[InlineKeyboardButton("✅ Yes, Delete", callback_data="confirm_event_delete"),
+                     InlineKeyboardButton("❌ No, Cancel", callback_data="cancel_event_delete")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await update.message.reply_html(confirm_text, reply_markup=reply_markup)
 
     elif match_type == 'MULTIPLE':
-        await update.message.reply_text("Found multiple events that might match. Please be more specific (e.g., include exact time or more title details).")
+        await update.message.reply_text(
+            "Found multiple events that might match. Please be more specific (e.g., include exact time or more title details).")
 
 
 # === Telegram Update Handlers ===
@@ -279,11 +390,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "- 'What's on my calendar tomorrow?'\n"
         "- 'Show me next week'\n"
         "- 'Schedule lunch with Sarah Tuesday at 1pm'\n"
-        "- 'Delete team meeting Thursday morning'\n\n" # Added delete example
+        "- 'Delete team meeting Thursday morning'\n\n"  # Added delete example
         "Use /connect_calendar to link your Google Account.\n"
         "Type /help for more commands.",
         disable_web_page_preview=True
     )
+
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Sends a help message listing commands."""
@@ -306,14 +418,18 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     """
     await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
 
+
 async def connect_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Starts the Google Calendar OAuth flow."""
     user_id = update.effective_user.id
     logger.info(f"User {user_id} initiated calendar connection.")
     if gs.is_user_connected(user_id):
-         service = gs._build_calendar_service_client(user_id)
-         if service: await update.message.reply_text("Calendar already connected!"); return
-         else: await update.message.reply_text("Issue with stored connection. Reconnecting..."); gs.delete_user_token(user_id)
+        service = gs._build_calendar_service_client(user_id)
+        if service:
+            await update.message.reply_text("Calendar already connected!"); return
+        else:
+            await update.message.reply_text("Issue with stored connection. Reconnecting..."); gs.delete_user_token(
+                user_id)
 
     flow = gs.get_google_auth_flow()
     if not flow: await update.message.reply_text("Error setting up connection."); return
@@ -326,14 +442,20 @@ async def connect_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text("Click to connect your Google Calendar:", reply_markup=reply_markup)
 
+
 async def my_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Checks connection status."""
     user_id = update.effective_user.id
     if gs.is_user_connected(user_id):
         service = gs._build_calendar_service_client(user_id)
-        if service: await update.message.reply_text("✅ Calendar connected & credentials valid.")
-        else: await update.message.reply_text("⚠️ Calendar connected, but credentials invalid. Try /disconnect_calendar and /connect_calendar.")
-    else: await update.message.reply_text("❌ Calendar not connected. Use /connect_calendar.")
+        if service:
+            await update.message.reply_text("✅ Calendar connected & credentials valid.")
+        else:
+            await update.message.reply_text(
+                "⚠️ Calendar connected, but credentials invalid. Try /disconnect_calendar and /connect_calendar.")
+    else:
+        await update.message.reply_text("❌ Calendar not connected. Use /connect_calendar.")
+
 
 async def disconnect_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Removes user's stored credentials."""
@@ -344,14 +466,17 @@ async def disconnect_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE
     if user_id in config.pending_deletions: del config.pending_deletions[user_id]
     await update.message.reply_text("Calendar connection removed." if deleted else "Calendar wasn't connected.")
 
+
 async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles the explicit /summary command."""
     user_id = update.effective_user.id
     logger.info(f"User {user_id} used /summary command. Args: {context.args}")
     if not gs.is_user_connected(user_id):
-        await update.message.reply_text("Please connect calendar first (/connect_calendar)."); return
+        await update.message.reply_text("Please connect calendar first (/connect_calendar).");
+        return
     time_period_str = " ".join(context.args) if context.args else "today"
-    await _handle_calendar_summary(update, context, {"time_period": time_period_str}) # Pass params dict
+    await _handle_calendar_summary(update, context, {"time_period": time_period_str})  # Pass params dict
+
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles non-command messages by invoking the LangChain agent."""
@@ -373,7 +498,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # Instead of blocking, maybe default and inform? Or stick to blocking.
         # Let's default to UTC for agent calls if not set, but inform user.
         user_timezone_str = 'UTC'
-        await update.message.reply_text("Note: Your timezone isn't set. Using UTC. Use /set_timezone for accurate local times.")
+        await update.message.reply_text(
+            "Note: Your timezone isn't set. Using UTC. Use /set_timezone for accurate local times.")
         # Alternative: Block until set
         # await update.message.reply_text("Please set timezone first (/set_timezone).")
         # return
@@ -381,7 +507,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # 3. Retrieve/Initialize conversation history from context.user_data
     if 'lc_history' not in context.user_data:
         context.user_data['lc_history'] = []
-    chat_history: list[dict] = context.user_data['lc_history'] # Stores {'role': '...', 'content': '...'}
+    chat_history: list[dict] = context.user_data['lc_history']  # Stores {'role': '...', 'content': '...'}
 
     # Add current user message to simple history list
     chat_history.append({'role': 'user', 'content': text})
@@ -393,24 +519,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except Exception as e:
         logger.error(f"Failed to initialize agent for user {user_id}: {e}", exc_info=True)
         await update.message.reply_text("Sorry, there was an error setting up the AI agent.")
-        chat_history.pop() # Remove user message if agent failed to init
+        chat_history.pop()  # Remove user message if agent failed to init
         return
 
     # 5. Invoke Agent Executor
-    await update.message.chat.send_action(action="typing") # Indicate thinking
+    await update.message.chat.send_action(action="typing")  # Indicate thinking
     try:
         # Use ainvoke for async execution
         # Input structure depends on the prompt template (e.g., 'input' key)
         response = await agent_executor.ainvoke({
             "input": text
             # chat_history is handled by the memory object passed to AgentExecutor
-            })
+        })
         agent_response = response.get('output', "Sorry, I didn't get a response.")
 
     except Exception as e:
         logger.error(f"Agent execution error for user {user_id}: {e}", exc_info=True)
         agent_response = "Sorry, an error occurred while processing your request with the agent."
-        chat_history.pop() # Remove user message if agent failed
+        chat_history.pop()  # Remove user message if agent failed
 
         # --- Send Response & Check for Pending Actions ---
     reply_markup = None
@@ -429,9 +555,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # Agent response should already be the confirmation question from the tool
 
     # Send the agent's final text response, potentially with buttons
-    await update.message.reply_text(agent_response, reply_markup=reply_markup,
-                                    parse_mode=ParseMode.HTML)  # Use HTML for pending action summaries if needed
-    if agent_response and "error" not in agent_response.lower(): # Avoid saving error messages as model response
+    await update.message.reply_text(
+        agent_response,
+        reply_markup=reply_markup,
+        parse_mode=ParseMode.HTML,  # <--- SET PARSE MODE TO HTML
+        disable_web_page_preview=True  # Optional: prevent link previews for maps
+    )
+    if agent_response and "error" not in agent_response.lower():  # Avoid saving error messages as model response
         chat_history.append({'role': 'model', 'content': agent_response})
 
     # 7. Trim history
@@ -453,8 +583,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         event_details = config.pending_events.pop(user_id)
         await query.edit_message_text(f"Adding '{event_details.get('summary')}'...")
         success, msg, link = await gs.create_calendar_event(user_id, event_details)
-        final_msg = msg + (f"\nView: {link}" if link else ""); await query.edit_message_text(final_msg)
-        if not success and "Authentication failed" in msg and not gs.is_user_connected(user_id): logger.info(f"Token cleared for {user_id} during failed create.")
+        final_msg = msg + (f"\nView: {link}" if link else "");
+        await query.edit_message_text(final_msg, parse_mode=ParseMode.HTML)
+        if not success and "Authentication failed" in msg and not gs.is_user_connected(user_id): logger.info(
+            f"Token cleared for {user_id} during failed create.")
 
     elif callback_data == "cancel_event_create":
         if user_id in config.pending_events: del config.pending_events[user_id]
@@ -465,11 +597,13 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if user_id not in config.pending_deletions: await query.edit_message_text("Confirmation expired."); return
         pending = config.pending_deletions.pop(user_id)
         event_id, summary = pending.get('event_id'), pending.get('summary', 'event')
-        if not event_id: logger.error(f"Missing event_id for {user_id}"); await query.edit_message_text("Error: Missing event ID."); return
+        if not event_id: logger.error(f"Missing event_id for {user_id}"); await query.edit_message_text(
+            "Error: Missing event ID."); return
         await query.edit_message_text(f"Deleting '{summary}'...")
         success, msg = await gs.delete_calendar_event(user_id, event_id)
-        await query.edit_message_text(msg)
-        if not success and "Authentication failed" in msg and not gs.is_user_connected(user_id): logger.info(f"Token cleared for {user_id} during failed delete.")
+        await query.edit_message_text(msg, parse_mode=ParseMode.HTML)
+        if not success and "Authentication failed" in msg and not gs.is_user_connected(user_id): logger.info(
+            f"Token cleared for {user_id} during failed delete.")
 
     elif callback_data == "cancel_event_delete":
         if user_id in config.pending_deletions: del config.pending_deletions[user_id]
@@ -477,8 +611,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     else:
         logger.warning(f"Callback: Unhandled callback data: {callback_data}")
-        try: await query.edit_message_text("Action not understood or expired.")
-        except Exception: pass
+        try:
+            await query.edit_message_text("Action not understood or expired.")
+        except Exception:
+            pass
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -491,8 +627,10 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     # logger.error("\n".join(tb_string))
 
     if isinstance(update, Update) and update.effective_message:
-         try: await update.effective_message.reply_text("Sorry, an internal error occurred. Please try again.")
-         except Exception as e: logger.error(f"Failed to send error message to user: {e}")
+        try:
+            await update.effective_message.reply_text("Sorry, an internal error occurred. Please try again.")
+        except Exception as e:
+            logger.error(f"Failed to send error message to user: {e}")
 
 
 # --- NEW /set_timezone Conversation Handler ---
@@ -509,7 +647,8 @@ async def set_timezone_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
         prompt += "Your timezone is not set yet."
 
     await update.message.reply_text(prompt, parse_mode=ParseMode.MARKDOWN)
-    return ASKING_TIMEZONE # Transition to the next state
+    return ASKING_TIMEZONE  # Transition to the next state
+
 
 async def received_timezone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Receives potential timezone string, validates, saves, and ends."""
@@ -523,9 +662,10 @@ async def received_timezone(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         # Save using google_services function
         success = gs.set_user_timezone(user_id, timezone_str)
         if success:
-            await update.message.reply_text(f"✅ Timezone set to `{timezone_str}` successfully!", parse_mode=ParseMode.MARKDOWN)
+            await update.message.reply_text(f"✅ Timezone set to `{timezone_str}` successfully!",
+                                            parse_mode=ParseMode.MARKDOWN)
             logger.info(f"Successfully set timezone for user {user_id}")
-            return ConversationHandler.END # End conversation
+            return ConversationHandler.END  # End conversation
         else:
             await update.message.reply_text("Sorry, there was an error saving your timezone. Please try again.")
             # Stay in the same state or end? Let's end for simplicity.
@@ -539,11 +679,12 @@ async def received_timezone(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             "Check the list: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones\n"
             "Or type /cancel."
         )
-        return ASKING_TIMEZONE # Stay in the same state to allow retry
+        return ASKING_TIMEZONE  # Stay in the same state to allow retry
     except Exception as e:
         logger.error(f"Error processing timezone for user {user_id}: {e}", exc_info=True)
         await update.message.reply_text("An unexpected error occurred. Please try again later or /cancel.")
         return ConversationHandler.END
+
 
 async def cancel_timezone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Cancels the timezone setting conversation."""
