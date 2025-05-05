@@ -11,6 +11,7 @@ from pytz.exceptions import UnknownTimeZoneError
 import config  # Need access to pending_actions
 import google_services as gs
 import llm_service
+from handlers import parse_and_format_event_time
 from utils import _format_event_time
 
 logger = logging.getLogger(__name__)
