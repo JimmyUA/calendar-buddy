@@ -73,12 +73,20 @@ def format_event_list_for_agent(events: list, time_period_str: str, user_timezon
 
         output_lines.append(line)
 
+        # Check if output_lines only contains the initial header
+        if len(output_lines) <= 1:
+            logger.warning(f"Event formatting resulted in no event lines being added. Initial header: {output_lines}")
+            # Return the "No events found" message instead of just the header
+            return f"No events found {time_period_str} (or failed to format events)."
+
     # Join lines, ensuring proper spacing after day separators
     formatted_output = ""
     for i, line in enumerate(output_lines):
         if line.startswith("---") and i > 1 and not output_lines[i - 1].strip() == "":
             formatted_output += "\n"  # Add extra newline before date separator
         formatted_output += line + "\n"
+
+    return formatted_output.strip()
 
 
 # === Custom Base Tool with User Context ===
