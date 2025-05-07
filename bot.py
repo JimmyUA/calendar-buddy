@@ -66,7 +66,11 @@ def main() -> None:
     logger.info("Health check server thread started.")
 
     # --- Create the Application ---
-    application = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
+    application = (Application.builder()
+                   .token(config.TELEGRAM_BOT_TOKEN)
+                   .connection_pool_size(10)
+                   .concurrent_updates(True)
+                   .build())
 
     # --- Setup /set_timezone conversation ---
     timezone_conv_handler = ConversationHandler(
