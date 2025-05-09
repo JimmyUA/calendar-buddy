@@ -5,15 +5,14 @@ from dateutil import parser as dateutil_parser
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram.constants import ParseMode
-import re  # Keep for potential simple logic
 # Timezone libraries
 import pytz
 from pytz.exceptions import UnknownTimeZoneError
 
 import config
 import google_services as gs  # For Calendar and Auth services
-import llm_service  # Import LLM Service
-from agent import initialize_agent
+from llm import llm_service
+from llm.agent import initialize_agent
 from utils import _format_event_time
 
 logger = logging.getLogger(__name__)
