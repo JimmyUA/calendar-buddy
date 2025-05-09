@@ -200,12 +200,14 @@ async def _handle_calendar_create(update: Update, context: ContextTypes.DEFAULT_
         keyboard = [[InlineKeyboardButton("✅ Confirm", callback_data="confirm_event_create"),
                      InlineKeyboardButton("❌ Cancel", callback_data="cancel_event_create")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
+        logger.log(logging.DEBUG, f"Pending event data for user {user_id}: {google_event_data} and confirmation text: {confirm_text}")
         await update.message.reply_html(confirm_text, reply_markup=reply_markup)
 
     except Exception as e:
         logger.error(f"Error preparing create confirmation for user {user_id}: {e}", exc_info=True)
         await update.message.reply_text(
-            "Sorry, I had trouble processing the event details (e.g., date/time format). Please try phrasing it differently.")
+            "Sorry, I had trouble processing the event details (e.g., date/time format). Please try phrasing it "
+            "differently.")
 
 
 async def _handle_calendar_delete(update: Update, context: ContextTypes.DEFAULT_TYPE, parameters: dict):
