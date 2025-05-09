@@ -393,13 +393,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, exp
         return
 
     user_id = update.effective_user.id
+    # Use explicit input if provided (e.g., from /summary), otherwise use message text
     text = explicit_input if explicit_input else update.message.text
 
     if not text:
         logger.warning("handle_message received empty text.")
-        return
+        return # Ignore empty messages
 
-    logger.info(f"Agent Handler: Received input for user {user_id}: '{text[:50]}...'")
+    logger.info(f"Agent Handler: Received input for user {user_id}: '{text[:100]}...'") # Log more of the text
 
     # 1. Check connection status
     if not gs.is_user_connected(user_id):
@@ -410,25 +411,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, exp
     user_timezone_str = gs.get_user_timezone_str(user_id)
     if not user_timezone_str:
         user_timezone_str = 'UTC' # Default if not set
-        if 'timezone_notified' not in context.user_data: # Notify user only once per session
+        # Notify user only once per session about UTC default
+        if 'timezone_notified_utc_default' not in context.user_data:
              await update.message.reply_text(
-                "Note: Your timezone isn't set. Using UTC. Use /set_timezone for accurate local times.",
+                "Note: Your timezone isn't set. Using UTC for now. "
+                "Use /set_timezone for accurate local times.",
                 parse_mode=ParseMode.MARKDOWN
             )
-             context.user_data['timezone_notified'] = True
+             context.user_data['timezone_notified_utc_default'] = True
 
-    # 3. Retrieve/Initialize conversation history
+    # 3. Retrieve/Initialize conversation history from context.user_data
     if 'lc_history' not in context.user_data:
         context.user_data['lc_history'] = []
     chat_history: list[dict] = context.user_data['lc_history']
 
-    if not explicit_input: # Don't add command-generated input to history
+    # Add current user message to simple history list if it's not command-generated
+    if not explicit_input:
         chat_history.append({'role': 'user', 'content': text})
 
-    # --- Clear previous pending state from user_data before calling agent ---
-    context.user_data.pop('pending_create', None)
-    context.user_data.pop('pending_delete', None)
-    logger.debug(f"Cleared pending actions for user {user_id} from context.user_data before agent call.")
+    # --- Clear previous pending state if this is a new user message (not agent continuing) ---
+    if not explicit_input: # True if it's a direct user message, not from /summary
+        # If a new message comes, assume any prior confirmation request is abandoned
+        cleared_create = context.user_data.pop('pending_create', None)
+        cleared_delete = context.user_data.pop('pending_delete', None)
+        if cleared_create or cleared_delete:
+            logger.debug(f"Cleared previous pending actions for user {user_id} as new user message received.")
 
     # 4. Initialize Agent Executor
     try:
@@ -442,17 +449,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, exp
 
     # 5. Invoke Agent Executor
     await update.message.chat.send_action(action="typing")
-    raw_agent_output_string = "Sorry, an error occurred while processing your request." # Default error message
+    raw_agent_output_string = "Sorry, an error occurred while processing your request." # Default
     try:
         response = await agent_executor.ainvoke({"input": text})
         raw_agent_output_string = response.get('output')
-        if raw_agent_output_string is None: # Handle case where agent returns None output
+        if raw_agent_output_string is None:
             raw_agent_output_string = "Sorry, I didn't get a specific instruction from the agent."
             logger.warning(f"Agent output was None for user {user_id}, input: '{text}'")
-
     except Exception as e:
         logger.error(f"Agent execution error for user {user_id}: {e}", exc_info=True)
-        # chat_history.pop() # Don't pop here as agent might have partially run
+        # Keep default error message, history pop handled by some agent errors
 
     # --- Process Agent Output & Prepare Reply ---
     reply_markup = None
@@ -463,33 +469,45 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, exp
             # Attempt to parse output as JSON (potential confirmation action from a tool)
             output_data = json.loads(raw_agent_output_string)
             action = output_data.get("action")
-            confirmation_question = output_data.get("confirmation_question")
+            confirmation_question_from_tool = output_data.get("confirmation_question")
 
-            if action == "confirm_create" and confirmation_question and "event_data" in output_data:
+            # Always use the question from tool if structured for confirmation
+            if confirmation_question_from_tool:
+                final_message_to_user = confirmation_question_from_tool
+
+            if action == "confirm_create" and confirmation_question_from_tool and "event_data" in output_data:
                 logger.info(f"Storing pending event create for user {user_id} in context.user_data.")
                 context.user_data['pending_create'] = output_data['event_data']
-                final_message_to_user = confirmation_question # Use the detailed question from the tool
+                context.user_data.pop('pending_delete', None) # Clear other pending
                 keyboard = [[ InlineKeyboardButton("✅ Confirm Create", callback_data="confirm_event_create"),
                               InlineKeyboardButton("❌ Cancel Create", callback_data="cancel_event_create") ]]
                 reply_markup = InlineKeyboardMarkup(keyboard)
 
-            elif action == "confirm_delete" and confirmation_question and "delete_info" in output_data:
+            elif action == "confirm_delete" and confirmation_question_from_tool and "delete_info" in output_data:
                 logger.info(f"Storing pending event delete for user {user_id} in context.user_data.")
                 context.user_data['pending_delete'] = output_data['delete_info']
-                final_message_to_user = confirmation_question # Use the detailed question from the tool
+                context.user_data.pop('pending_create', None) # Clear other pending
                 keyboard = [[ InlineKeyboardButton("✅ Yes, Delete", callback_data="confirm_event_delete"),
                               InlineKeyboardButton("❌ No, Cancel", callback_data="cancel_event_delete") ]]
                 reply_markup = InlineKeyboardMarkup(keyboard)
+
             elif "error" in output_data: # Tool returned a JSON formatted error
                 final_message_to_user = f"An error occurred: {output_data['error']}"
                 logger.warning(f"Tool returned a JSON error: {output_data['error']}")
+                # Clear pending states if tool returns an error that isn't a confirmation
+                context.user_data.pop('pending_create', None)
+                context.user_data.pop('pending_delete', None)
             else:
-                 # JSON parsed, but not a recognized confirmation action or error structure
-                 logger.warning(f"Agent returned unexpected JSON structure: {output_data}")
-                 # Keep raw_agent_output_string as final_message_to_user
+                 # JSON parsed, but not a recognized confirmation action or error structure.
+                 # Agent might have returned some other valid JSON. Treat its content as the message.
+                 logger.debug(f"Agent returned JSON, but not for confirmation: {output_data}")
+                 final_message_to_user = json.dumps(output_data, indent=2) # Pretty print other JSON
+                 context.user_data.pop('pending_create', None)
+                 context.user_data.pop('pending_delete', None)
 
         except json.JSONDecodeError:
             # Agent output was not JSON, treat as a direct text answer
+            final_message_to_user = raw_agent_output_string # Already set by default
             # Ensure no stale pending actions remain from previous turns if agent gives a final text answer now
             context.user_data.pop('pending_create', None)
             context.user_data.pop('pending_delete', None)
@@ -497,28 +515,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, exp
         except Exception as e:
              logger.error(f"Error processing agent's structured output: {e}", exc_info=True)
              final_message_to_user = "Sorry, there was an issue interpreting the agent's decision."
-             context.user_data.pop('pending_create', None) # Clear pending on error
+             context.user_data.pop('pending_create', None)
              context.user_data.pop('pending_delete', None)
 
-    # 6. Send the final text response, potentially with buttons
+    # 6. Send the final text response
     await update.message.reply_text(
-        final_message_to_user or "I'm not sure how to respond to that.", # Fallback if empty
+        final_message_to_user or "I'm not sure how to respond to that.", # Fallback for safety
         reply_markup=reply_markup,
         parse_mode=ParseMode.HTML,
         disable_web_page_preview=True
     )
 
     # 7. Update History
-    if final_message_to_user and "error" not in final_message_to_user.lower():
-         # Add agent's final textual response to history
-         if not chat_history or chat_history[-1].get('content') != final_message_to_user:
+    # Add agent's final textual response to history for context in next turn
+    if final_message_to_user and "error" not in final_message_to_user.lower(): # Avoid saving error messages as model's turn
+         # Check if the last message is already this agent response to avoid duplicates from memory object
+        if not chat_history or chat_history[-1].get('content') != final_message_to_user or chat_history[-1].get('role') != 'model':
              chat_history.append({'role': 'model', 'content': final_message_to_user})
 
     # 8. Trim History
-    max_hist = getattr(config, 'MAX_HISTORY_MESSAGES', 20)
+    max_hist = getattr(config, 'MAX_HISTORY_MESSAGES', 20) # Default to 20 if not in config
     if len(chat_history) > max_hist:
         context.user_data['lc_history'] = chat_history[-max_hist:]
-
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles button presses from inline keyboards."""
     query = update.callback_query
