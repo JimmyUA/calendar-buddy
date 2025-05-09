@@ -8,6 +8,7 @@ from telegram.constants import ParseMode
 # Timezone libraries
 import pytz
 from pytz.exceptions import UnknownTimeZoneError
+import json
 
 import config
 import google_services as gs  # For Calendar and Auth services
@@ -385,96 +386,138 @@ async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await _handle_calendar_summary(update, context, {"time_period": time_period_str})  # Pass params dict
 
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handles non-command messages by invoking the LangChain agent."""
-    if not update.message or not update.message.text:
-        logger.warning("handle_message received update without message text.")
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, explicit_input: str | None = None) -> None:
+    """Handles non-command messages by invoking the LangChain agent and processing tool output."""
+    if not update.message and not explicit_input:
+        logger.warning("handle_message called without message or explicit input.")
         return
+
     user_id = update.effective_user.id
-    text = update.message.text
-    logger.info(f"Agent Handler: Received message from user {user_id}: '{text[:50]}...'")
+    text = explicit_input if explicit_input else update.message.text
+
+    if not text:
+        logger.warning("handle_message received empty text.")
+        return
+
+    logger.info(f"Agent Handler: Received input for user {user_id}: '{text[:50]}...'")
 
     # 1. Check connection status
     if not gs.is_user_connected(user_id):
         await update.message.reply_text("Please connect your Google Calendar first using /connect_calendar.")
         return
 
-    # 2. Get user timezone (prompt if needed)
+    # 2. Get user timezone
     user_timezone_str = gs.get_user_timezone_str(user_id)
     if not user_timezone_str:
-        # Instead of blocking, maybe default and inform? Or stick to blocking.
-        # Let's default to UTC for agent calls if not set, but inform user.
-        user_timezone_str = 'UTC'
-        await update.message.reply_text(
-            "Note: Your timezone isn't set. Using UTC. Use /set_timezone for accurate local times.")
-        # Alternative: Block until set
-        # await update.message.reply_text("Please set timezone first (/set_timezone).")
-        # return
+        user_timezone_str = 'UTC' # Default if not set
+        if 'timezone_notified' not in context.user_data: # Notify user only once per session
+             await update.message.reply_text(
+                "Note: Your timezone isn't set. Using UTC. Use /set_timezone for accurate local times.",
+                parse_mode=ParseMode.MARKDOWN
+            )
+             context.user_data['timezone_notified'] = True
 
-    # 3. Retrieve/Initialize conversation history from context.user_data
+    # 3. Retrieve/Initialize conversation history
     if 'lc_history' not in context.user_data:
         context.user_data['lc_history'] = []
-    chat_history: list[dict] = context.user_data['lc_history']  # Stores {'role': '...', 'content': '...'}
+    chat_history: list[dict] = context.user_data['lc_history']
 
-    # Add current user message to simple history list
-    chat_history.append({'role': 'user', 'content': text})
+    if not explicit_input: # Don't add command-generated input to history
+        chat_history.append({'role': 'user', 'content': text})
 
-    # 4. Initialize Agent Executor (with user context and history)
+    # --- Clear previous pending state from user_data before calling agent ---
+    context.user_data.pop('pending_create', None)
+    context.user_data.pop('pending_delete', None)
+    logger.debug(f"Cleared pending actions for user {user_id} from context.user_data before agent call.")
+
+    # 4. Initialize Agent Executor
     try:
-        # Pass the simple history list; the initialize function converts it for LangChain memory
         agent_executor = initialize_agent(user_id, user_timezone_str, chat_history)
     except Exception as e:
         logger.error(f"Failed to initialize agent for user {user_id}: {e}", exc_info=True)
         await update.message.reply_text("Sorry, there was an error setting up the AI agent.")
-        chat_history.pop()  # Remove user message if agent failed to init
+        if not explicit_input and chat_history and chat_history[-1]['role'] == 'user':
+            chat_history.pop() # Remove user message if agent failed to init
         return
 
     # 5. Invoke Agent Executor
-    await update.message.chat.send_action(action="typing")  # Indicate thinking
+    await update.message.chat.send_action(action="typing")
+    raw_agent_output_string = "Sorry, an error occurred while processing your request." # Default error message
     try:
-        # Use ainvoke for async execution
-        # Input structure depends on the prompt template (e.g., 'input' key)
-        response = await agent_executor.ainvoke({
-            "input": text
-            # chat_history is handled by the memory object passed to AgentExecutor
-        })
-        agent_response = response.get('output', "Sorry, I didn't get a response.")
+        response = await agent_executor.ainvoke({"input": text})
+        raw_agent_output_string = response.get('output')
+        if raw_agent_output_string is None: # Handle case where agent returns None output
+            raw_agent_output_string = "Sorry, I didn't get a specific instruction from the agent."
+            logger.warning(f"Agent output was None for user {user_id}, input: '{text}'")
 
     except Exception as e:
         logger.error(f"Agent execution error for user {user_id}: {e}", exc_info=True)
-        agent_response = "Sorry, an error occurred while processing your request with the agent."
-        chat_history.pop()  # Remove user message if agent failed
+        # chat_history.pop() # Don't pop here as agent might have partially run
 
-        # --- Send Response & Check for Pending Actions ---
+    # --- Process Agent Output & Prepare Reply ---
     reply_markup = None
-    # Check if a pending action was stored by a tool during the agent run
-    if user_id in config.pending_events:
-        logger.info(f"Pending event create found for user {user_id}. Sending confirmation buttons.")
-        keyboard = [[InlineKeyboardButton("✅ Confirm Create", callback_data="confirm_event_create"),
-                     InlineKeyboardButton("❌ Cancel Create", callback_data="cancel_event_create")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        # Agent response should already be the confirmation question from the tool
-    elif user_id in config.pending_deletions:
-        logger.info(f"Pending event delete found for user {user_id}. Sending confirmation buttons.")
-        keyboard = [[InlineKeyboardButton("✅ Yes, Delete", callback_data="confirm_event_delete"),
-                     InlineKeyboardButton("❌ No, Cancel", callback_data="cancel_event_delete")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        # Agent response should already be the confirmation question from the tool
+    final_message_to_user = raw_agent_output_string # Default to the raw agent output
 
-    # Send the agent's final text response, potentially with buttons
+    if raw_agent_output_string:
+        try:
+            # Attempt to parse output as JSON (potential confirmation action from a tool)
+            output_data = json.loads(raw_agent_output_string)
+            action = output_data.get("action")
+            confirmation_question = output_data.get("confirmation_question")
+
+            if action == "confirm_create" and confirmation_question and "event_data" in output_data:
+                logger.info(f"Storing pending event create for user {user_id} in context.user_data.")
+                context.user_data['pending_create'] = output_data['event_data']
+                final_message_to_user = confirmation_question # Use the detailed question from the tool
+                keyboard = [[ InlineKeyboardButton("✅ Confirm Create", callback_data="confirm_event_create"),
+                              InlineKeyboardButton("❌ Cancel Create", callback_data="cancel_event_create") ]]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+
+            elif action == "confirm_delete" and confirmation_question and "delete_info" in output_data:
+                logger.info(f"Storing pending event delete for user {user_id} in context.user_data.")
+                context.user_data['pending_delete'] = output_data['delete_info']
+                final_message_to_user = confirmation_question # Use the detailed question from the tool
+                keyboard = [[ InlineKeyboardButton("✅ Yes, Delete", callback_data="confirm_event_delete"),
+                              InlineKeyboardButton("❌ No, Cancel", callback_data="cancel_event_delete") ]]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+            elif "error" in output_data: # Tool returned a JSON formatted error
+                final_message_to_user = f"An error occurred: {output_data['error']}"
+                logger.warning(f"Tool returned a JSON error: {output_data['error']}")
+            else:
+                 # JSON parsed, but not a recognized confirmation action or error structure
+                 logger.warning(f"Agent returned unexpected JSON structure: {output_data}")
+                 # Keep raw_agent_output_string as final_message_to_user
+
+        except json.JSONDecodeError:
+            # Agent output was not JSON, treat as a direct text answer
+            # Ensure no stale pending actions remain from previous turns if agent gives a final text answer now
+            context.user_data.pop('pending_create', None)
+            context.user_data.pop('pending_delete', None)
+            logger.debug("Agent output was not JSON, treated as direct textual response.")
+        except Exception as e:
+             logger.error(f"Error processing agent's structured output: {e}", exc_info=True)
+             final_message_to_user = "Sorry, there was an issue interpreting the agent's decision."
+             context.user_data.pop('pending_create', None) # Clear pending on error
+             context.user_data.pop('pending_delete', None)
+
+    # 6. Send the final text response, potentially with buttons
     await update.message.reply_text(
-        agent_response,
+        final_message_to_user or "I'm not sure how to respond to that.", # Fallback if empty
         reply_markup=reply_markup,
-        parse_mode=ParseMode.HTML,  # <--- SET PARSE MODE TO HTML
-        disable_web_page_preview=True  # Optional: prevent link previews for maps
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True
     )
-    if agent_response and "error" not in agent_response.lower():  # Avoid saving error messages as model response
-        chat_history.append({'role': 'model', 'content': agent_response})
 
-    # 7. Trim history
-    if len(chat_history) > config.MAX_HISTORY_MESSAGES:
-        context.user_data['lc_history'] = chat_history[-config.MAX_HISTORY_MESSAGES:]
+    # 7. Update History
+    if final_message_to_user and "error" not in final_message_to_user.lower():
+         # Add agent's final textual response to history
+         if not chat_history or chat_history[-1].get('content') != final_message_to_user:
+             chat_history.append({'role': 'model', 'content': final_message_to_user})
 
+    # 8. Trim History
+    max_hist = getattr(config, 'MAX_HISTORY_MESSAGES', 20)
+    if len(chat_history) > max_hist:
+        context.user_data['lc_history'] = chat_history[-max_hist:]
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles button presses from inline keyboards."""
