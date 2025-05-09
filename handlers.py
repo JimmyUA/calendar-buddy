@@ -462,66 +462,71 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, exp
 
     # --- Process Agent Output & Prepare Reply ---
     reply_markup = None
-    final_message_to_user = raw_agent_output_string # Default to the raw agent output
+    final_message_to_user = raw_agent_output_string  # Default to the raw agent output
 
     if raw_agent_output_string:
         try:
-            # Attempt to parse output as JSON (potential confirmation action from a tool)
             output_data = json.loads(raw_agent_output_string)
             action = output_data.get("action")
-            confirmation_question_from_tool = output_data.get("confirmation_question")
+            confirmation_question = output_data.get("confirmation_question")
 
-            # Always use the question from tool if structured for confirmation
-            if confirmation_question_from_tool:
-                final_message_to_user = confirmation_question_from_tool
-
-            if action == "confirm_create" and confirmation_question_from_tool and "event_data" in output_data:
+            # Check for valid "confirm_create" action
+            if action == "confirm_create" and confirmation_question and "event_data" in output_data:
                 logger.info(f"Storing pending event create for user {user_id} in context.user_data.")
                 context.user_data['pending_create'] = output_data['event_data']
-                context.user_data.pop('pending_delete', None) # Clear other pending
-                keyboard = [[ InlineKeyboardButton("✅ Confirm Create", callback_data="confirm_event_create"),
-                              InlineKeyboardButton("❌ Cancel Create", callback_data="cancel_event_create") ]]
+                context.user_data.pop('pending_delete', None)  # Clear other pending
+                final_message_to_user = confirmation_question  # Use the detailed question
+                keyboard = [[InlineKeyboardButton("✅ Confirm Create", callback_data="confirm_event_create"),
+                             InlineKeyboardButton("❌ Cancel Create", callback_data="cancel_event_create")]]
                 reply_markup = InlineKeyboardMarkup(keyboard)
 
-            elif action == "confirm_delete" and confirmation_question_from_tool and "delete_info" in output_data:
+            # Check for valid "confirm_delete" action
+            elif action == "confirm_delete" and confirmation_question and "delete_info" in output_data:
                 logger.info(f"Storing pending event delete for user {user_id} in context.user_data.")
                 context.user_data['pending_delete'] = output_data['delete_info']
-                context.user_data.pop('pending_create', None) # Clear other pending
-                keyboard = [[ InlineKeyboardButton("✅ Yes, Delete", callback_data="confirm_event_delete"),
-                              InlineKeyboardButton("❌ No, Cancel", callback_data="cancel_event_delete") ]]
+                context.user_data.pop('pending_create', None)  # Clear other pending
+                final_message_to_user = confirmation_question  # Use the detailed question
+                keyboard = [[InlineKeyboardButton("✅ Yes, Delete", callback_data="confirm_event_delete"),
+                             InlineKeyboardButton("❌ No, Cancel", callback_data="cancel_event_delete")]]
                 reply_markup = InlineKeyboardMarkup(keyboard)
 
-            elif "error" in output_data: # Tool returned a JSON formatted error
-                final_message_to_user = f"An error occurred: {output_data['error']}"
+            # Handle if tool returned a structured error
+            elif "error" in output_data:
+                final_message_to_user = f"An error from the tool: {output_data['error']}"
                 logger.warning(f"Tool returned a JSON error: {output_data['error']}")
-                # Clear pending states if tool returns an error that isn't a confirmation
+                # Clear any pending states as this isn't a confirmation
                 context.user_data.pop('pending_create', None)
                 context.user_data.pop('pending_delete', None)
+
             else:
-                 # JSON parsed, but not a recognized confirmation action or error structure.
-                 # Agent might have returned some other valid JSON. Treat its content as the message.
-                 logger.debug(f"Agent returned JSON, but not for confirmation: {output_data}")
-                 final_message_to_user = json.dumps(output_data, indent=2) # Pretty print other JSON
-                 context.user_data.pop('pending_create', None)
-                 context.user_data.pop('pending_delete', None)
+                # JSON parsed, but not a recognized confirmation action or error structure.
+                # Agent might have returned some other valid JSON. Treat its content as the message.
+                logger.debug(f"Agent returned JSON, but not for confirmation: {output_data}")
+                try:  # Try to pretty print if it's a dict/list
+                    final_message_to_user = json.dumps(output_data, indent=2)
+                except TypeError:
+                    final_message_to_user = str(output_data)  # Fallback to string representation
+                # Clear pending states as this isn't a confirmation
+                context.user_data.pop('pending_create', None)
+                context.user_data.pop('pending_delete', None)
 
         except json.JSONDecodeError:
             # Agent output was not JSON, treat as a direct text answer
-            final_message_to_user = raw_agent_output_string # Already set by default
-            # Ensure no stale pending actions remain from previous turns if agent gives a final text answer now
+            # final_message_to_user is already raw_agent_output_string
+            # Ensure no stale pending actions remain
             context.user_data.pop('pending_create', None)
             context.user_data.pop('pending_delete', None)
             logger.debug("Agent output was not JSON, treated as direct textual response.")
         except Exception as e:
-             logger.error(f"Error processing agent's structured output: {e}", exc_info=True)
-             final_message_to_user = "Sorry, there was an issue interpreting the agent's decision."
-             context.user_data.pop('pending_create', None)
-             context.user_data.pop('pending_delete', None)
+            logger.error(f"Error processing agent's structured output: {e}", exc_info=True)
+            final_message_to_user = "Sorry, there was an issue interpreting the agent's decision."
+            context.user_data.pop('pending_create', None)
+            context.user_data.pop('pending_delete', None)
 
     # 6. Send the final text response
     await update.message.reply_text(
-        final_message_to_user or "I'm not sure how to respond to that.", # Fallback for safety
-        reply_markup=reply_markup,
+        final_message_to_user or "I'm not sure how to respond to that.",
+        reply_markup=reply_markup,  # This will be None if not a valid confirmation
         parse_mode=ParseMode.HTML,
         disable_web_page_preview=True
     )
