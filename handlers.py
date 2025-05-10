@@ -524,6 +524,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, exp
             context.user_data.pop('pending_delete', None)
 
     # 6. Send the final text response
+    logger.info(f"Final message to user {user_id}: '{final_message_to_user}' with reply_markup: {reply_markup}")
     await update.message.reply_text(
         final_message_to_user or "I'm not sure how to respond to that.",
         reply_markup=reply_markup,  # This will be None if not a valid confirmation
