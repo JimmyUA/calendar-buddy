@@ -470,6 +470,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, exp
             action = output_data.get("action")
             confirmation_question = output_data.get("confirmation_question")
 
+            logger.info(f"Action is ${action} and confirmation question is ${confirmation_question} and output data is {output_data}")
+
             # Check for valid "confirm_create" action
             if action == "confirm_create" and confirmation_question and "event_data" in output_data:
                 logger.info(f"Storing pending event create for user {user_id} in context.user_data.")
