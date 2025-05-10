@@ -43,20 +43,20 @@ def initialize_agent(user_id: int, user_timezone_str: str, chat_history: list) -
     tool_descriptions = render_text_description(tools)
 
     template = f"""
-    Answer the following questions as best you can based on the conversation history and the user's request. You have access to the following tools:
+    Answer the following questions as best you can... You have access to the following tools:
 
     {tool_descriptions}
 
     Use the following format:
 
     Question: the input question you must answer
-    Thought: Step-by-step thinking process. If deleting, first use 'search_calendar_events' to find the event ID. Then, use 'delete_calendar_event' with ONLY the event ID. If creating, use 'create_calendar_event' with the natural language description.
+    Thought: Step-by-step thinking process.
     Action: the action to take, one of [{", ".join([t.name for t in tools])}]
-    Action Input: The required input for the action (natural language for create/read/search, event ID for delete).
-    Observation: the result of the action. **IMPORTANT: If the Observation from 'create_calendar_event' or 'delete_calendar_event' is a question asking for confirmation (e.g., "Should I add this..." or "Should I delete this..."), your job is done for this step. Your Final Answer MUST be exactly that confirmation question.** Do not try to call the tool again or re-answer the original question in this case.
+    Action Input: The required input for the action.
+    Observation: the result of the action.
     ... (this Thought/Action/Action Input/Observation can repeat N times)
-    Thought: I have the information needed OR the tool returned a confirmation question.
-    Final Answer: the final answer to the original input question, OR the exact confirmation question returned by the create/delete tool.
+    Thought: I now know the final answer OR the tool has provided a structured JSON response for confirmation.
+    Final Answer: If a tool (like create_calendar_event or delete_calendar_event) provided a structured JSON string as its Observation, output **that exact JSON string** as your Final Answer. Otherwise, provide the direct textual answer to the user's question.
 
     Begin!
 
