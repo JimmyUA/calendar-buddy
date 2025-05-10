@@ -452,6 +452,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, exp
     raw_agent_output_string = "Sorry, an error occurred while processing your request." # Default
     try:
         response = await agent_executor.ainvoke({"input": text})
+        logger.info(f"Agent response for user {user_id}: {response}")
         raw_agent_output_string = response.get('output')
         if raw_agent_output_string is None:
             raw_agent_output_string = "Sorry, I didn't get a specific instruction from the agent."
