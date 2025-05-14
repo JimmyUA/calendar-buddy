@@ -1,34 +1,30 @@
-# requirements.txt
-
 # --- Telegram Bot ---
-python-telegram-bot>=20.6,<22.0 # Specify a reasonable upper bound if needed
+python-telegram-bot>=20.6,<22.0
 
 # --- Langchain Core & Integrations ---
 langchain>=0.2.0
 langchain-core>=0.2.0
-langchain-google-genai>=1.0.0 # Let this install compatible google-generativeai
-langchain-community>=0.2.0 # For ChatMessageHistory if used
+langchain-google-genai>=1.0.0
+langchain-community>=0.2.0
 
 # --- Google Cloud & API Libraries ---
-google-cloud-firestore>=2.11.0 # For database
-google-api-python-client>=2.80.0 # For Calendar API
-google-auth-oauthlib>=1.0.0 # For OAuth flow
-google-auth-httplib2>=0.1.0 # For OAuth HTTP transport
-# google-generativeai # REMOVED - Let langchain-google-genai handle this dependency
+google-cloud-firestore>=2.11.0
+google-api-python-client>=2.80.0
+google-auth-oauthlib>=1.0.0
+google-auth-httplib2>=0.1.0
 
 # --- Date/Time Handling ---
-pytz>=2023.3 # For timezone handling
-python-dateutil>=2.8.2 # For flexible date parsing
+pytz>=2023.3
+python-dateutil>=2.8.2
 
 # --- Web Server (for OAuth Callback) ---
-Flask>=2.3.0 # Or FastAPI
-gunicorn>=21.2.0 # WSGI server for Flask/FastAPI in Cloud Run
+Flask>=2.3.0
+gunicorn>=21.2.0
 
 # --- Utility ---
-python-dotenv>=1.0.0 # For loading .env file locally
-httpx>=0.24.0 # Often used by underlying libraries
+python-dotenv>=1.0.0
+httpx>=0.24.0
 
-# --- Pydantic (Optional but recommended for Langchain Tool Schema stability) ---
-# Specify v1 explicitly if needed for compatibility, otherwise remove if v2 works
-pydantic<2,>=1.10 # Constrain to Pydantic v1.x
-google-cloud-secret-manager>=2.16.0 # For secret management
+# --- Pydantic will be installed as a dependency of langchain-core ---
+
+google-cloud-secret-manager>=2.16.0

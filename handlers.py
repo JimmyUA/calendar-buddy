@@ -319,6 +319,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     /start - Welcome message.
     /connect_calendar - Authorize access to your Google Calendar.
     /my_status - Check if your calendar is connected.
+    /set_timezone - Set your timezone for accurate event times.
     /disconnect_calendar - Revoke access to your calendar.
     /summary `[time period]` - Explicitly request a summary.
     /help - Show this help message.
