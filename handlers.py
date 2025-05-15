@@ -447,27 +447,79 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         chat_history.pop()  # Remove user message if agent failed
 
         # --- Send Response & Check for Pending Actions ---
+    final_message_to_send = agent_response  # Start with agent's direct output
     reply_markup = None
     # Check if a pending action was stored by a tool during the agent run
     if user_id in config.pending_events:
-        logger.info(f"Pending event create found for user {user_id}. Sending confirmation buttons.")
-        keyboard = [[InlineKeyboardButton("✅ Confirm Create", callback_data="confirm_event_create"),
-                     InlineKeyboardButton("❌ Cancel Create", callback_data="cancel_event_create")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        # Agent response should already be the confirmation question from the tool
+        logger.info(f"Pending event create found for user {user_id}. Formatting confirmation from pending data.")
+        pending_event_data = config.pending_events[user_id]
+        try:
+            user_tz = pytz.timezone(user_timezone_str if user_timezone_str else 'UTC') # Get user TZ
+
+            summary = pending_event_data.get('summary', 'N/A')
+            # Re-parse and format start/end times for confirmation display
+            # This assumes start/end in pending_event_data are like {'dateTime': ISO, 'timeZone': IANA}
+            start_dt_iso = pending_event_data.get('start', {})
+            end_dt_iso = pending_event_data.get('end', {})
+
+            if not start_dt_iso: raise ValueError("Missing start dateTime in pending event")
+
+            # Construct the detailed confirmation message HERE
+            final_message_to_send = (
+                f"Okay, I can create this event:\n"
+                f"<b>Summary:</b> {summary}\n"
+                f"<b>Start:</b> {start_dt_iso}\n"
+                f"<b>End:</b> {end_dt_iso}\n"
+                f"<b>Description:</b> {pending_event_data.get('description', '-')}\n"
+                f"<b>Location:</b> {pending_event_data.get('location', '-')}\n\n"
+                f"Should I add this to your calendar?"
+            )
+            keyboard = [[InlineKeyboardButton("✅ Confirm Create", callback_data="confirm_event_create"),
+                         InlineKeyboardButton("❌ Cancel Create", callback_data="cancel_event_create")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+        except Exception as e:
+            logger.error(f"Error formatting create confirmation in handler: {e}", exc_info=True)
+            final_message_to_send = "Error preparing event confirmation. Please try again."
     elif user_id in config.pending_deletions:
-        logger.info(f"Pending event delete found for user {user_id}. Sending confirmation buttons.")
+        logger.info(f"Pending event delete found for user {user_id}. Formatting confirmation from pending data.")
+        pending_deletion_data = config.pending_deletions[user_id]
+        event_id_to_delete = pending_deletion_data.get('event_id')
+        # Fetch full event details again to ensure the summary and time are current and correctly formatted
+        # This adds an API call but ensures accuracy for the confirmation.
+        # Alternatively, trust the summary stored during the tool run, but it might be less detailed.
+        event_details_for_confirm = await gs.get_calendar_event_by_id(user_id, event_id_to_delete)
+
+        if event_details_for_confirm:
+            try:
+                user_tz = pytz.timezone(user_timezone_str if user_timezone_str else 'UTC')
+                summary = event_details_for_confirm.get('summary', 'this event')
+                time_confirm = _format_event_time(event_details_for_confirm, user_tz) # Use your existing util
+
+                final_message_to_send = (
+                    f"Found event: '<b>{summary}</b>' ({time_confirm}).\n\n"
+                    f"Should I delete this event?"
+                )
+            except Exception as e:
+                logger.error(f"Error formatting delete confirmation in handler: {e}", exc_info=True)
+                # Fallback to summary stored by the tool if fresh fetch/format fails
+                summary = pending_deletion_data.get('summary', 'the selected event')
+                final_message_to_send = f"Are you sure you want to delete '{summary}'?"
+        else:
+            # Event might have been deleted by something else in the meantime
+            final_message_to_send = f"Could not re-fetch details for event ID '{event_id_to_delete}' for deletion confirmation. It might no longer exist. Proceed with deleting by ID?"
+            # Or, simply state:
+            # final_message_to_send = f"Are you sure you want to delete the previously selected event (ID: {event_id_to_delete})?"
+
         keyboard = [[InlineKeyboardButton("✅ Yes, Delete", callback_data="confirm_event_delete"),
                      InlineKeyboardButton("❌ No, Cancel", callback_data="cancel_event_delete")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        # Agent response should already be the confirmation question from the tool
-
     # Send the agent's final text response, potentially with buttons
+    # Send the final message (either agent's direct output or handler-formatted confirmation)
     await update.message.reply_text(
-        agent_response,
+        final_message_to_send, # Use the potentially overridden message
         reply_markup=reply_markup,
-        parse_mode=ParseMode.HTML,  # <--- SET PARSE MODE TO HTML
-        disable_web_page_preview=True  # Optional: prevent link previews for maps
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True
     )
     if agent_response and "error" not in agent_response.lower():  # Avoid saving error messages as model response
         chat_history.append({'role': 'model', 'content': agent_response})
