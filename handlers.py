@@ -13,6 +13,7 @@ import config
 import google_services as gs  # For Calendar and Auth services
 from llm import llm_service
 from llm.agent import initialize_agent
+from time_util import format_to_nice_date
 from utils import _format_event_time
 
 logger = logging.getLogger(__name__)
@@ -465,11 +466,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             if not start_dt_iso: raise ValueError("Missing start dateTime in pending event")
 
             # Construct the detailed confirmation message HERE
+            start_date_time = start_dt_iso.get('dateTime', '')
+            end_date_time = end_dt_iso.get('dateTime', '')
             final_message_to_send = (
                 f"Okay, I can create this event:\n"
                 f"<b>Summary:</b> {summary}\n"
-                f"<b>Start:</b> {start_dt_iso.get('dateTime', '')}\n"
-                f"<b>End:</b> {end_dt_iso.get('dateTime', '')}\n"
+                f"<b>Start:</b> {format_to_nice_date(start_date_time)}\n"
+                f"<b>End:</b> {format_to_nice_date(end_date_time)}\n"
                 f"<b>Description:</b> {pending_event_data.get('description', '-')}\n"
                 f"<b>Location:</b> {pending_event_data.get('location', '-')}\n\n"
                 f"Should I add this to your calendar?"
@@ -479,7 +482,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             reply_markup = InlineKeyboardMarkup(keyboard)
         except Exception as e:
             logger.error(f"Error formatting create confirmation in handler: {e}", exc_info=True)
-            final_message_to_send = "Error preparing event confirmation. Please try again."
+            final_message_to_send = "Error preparing event confirmation. Please try again. {e}"
     elif user_id in config.pending_deletions:
         logger.info(f"Pending event delete found for user {user_id}. Formatting confirmation from pending data.")
         pending_deletion_data = config.pending_deletions[user_id]

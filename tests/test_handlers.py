@@ -261,8 +261,8 @@ async def test_handle_message_agent_confirmation_create(mock_update, mock_contex
     # Simulate the agent returning the confirmation question from the create tool
     confirmation_question = f"""Okay, I can create this event:
 <b>Summary:</b> Lunch
-<b>Start:</b> Mon, Aug 19, 2024 at 12:00 PM PDT
-<b>End:</b> Tue, Aug 20, 2024 at 04:00 PM PDT
+<b>Start:</b> Sunday, 18 May 2025 · 12:33
+<b>End:</b> Sunday, 18 May 2025 · 13:33
 <b>Description:</b> -
 <b>Location:</b> -
 
