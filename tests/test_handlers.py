@@ -278,8 +278,8 @@ Should I add this to your calendar?"""
 
     # Simulate that the *tool run* (mocked within agent execution usually)
     # placed data into the config pending state before agent finished
-    mock_event_data = {'summary': 'Lunch', 'start': 'Mon, Aug 19, 2024 at 12:00 PM PDT',
-                       'end': 'Tue, Aug 20, 2024 at 04:00 PM PDT', }  # Example
+    mock_event_data = {'summary': 'Lunch', 'start': {'dateTime': '2025-05-18T12:33:00+02:00', 'timeZone': 'Europe/Amsterdam'},
+                       'end': {'dateTime': '2025-05-18T13:33:00+02:00', 'timeZone': 'Europe/Amsterdam'}, }  # Example
     config.pending_events[TEST_USER_ID] = mock_event_data  # Manually set state for test
 
     mock_context.user_data['lc_history'] = []

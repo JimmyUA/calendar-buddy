@@ -468,8 +468,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             final_message_to_send = (
                 f"Okay, I can create this event:\n"
                 f"<b>Summary:</b> {summary}\n"
-                f"<b>Start:</b> {start_dt_iso}\n"
-                f"<b>End:</b> {end_dt_iso}\n"
+                f"<b>Start:</b> {start_dt_iso.get('dateTime', '')}\n"
+                f"<b>End:</b> {end_dt_iso.get('dateTime', '')}\n"
                 f"<b>Description:</b> {pending_event_data.get('description', '-')}\n"
                 f"<b>Location:</b> {pending_event_data.get('location', '-')}\n\n"
                 f"Should I add this to your calendar?"
