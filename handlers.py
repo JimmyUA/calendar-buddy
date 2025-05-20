@@ -1,4 +1,5 @@
 # handlers.py
+import html
 import logging
 from datetime import datetime, timedelta, timezone
 from dateutil import parser as dateutil_parser
@@ -11,6 +12,7 @@ from pytz.exceptions import UnknownTimeZoneError
 
 import config
 import google_services as gs  # For Calendar and Auth services
+from handler.message_formatter import create_final_message
 from llm import llm_service
 from llm.agent import initialize_agent
 from time_util import format_to_nice_date
@@ -457,26 +459,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         try:
             user_tz = pytz.timezone(user_timezone_str if user_timezone_str else 'UTC') # Get user TZ
 
-            summary = pending_event_data.get('summary', 'N/A')
-            # Re-parse and format start/end times for confirmation display
-            # This assumes start/end in pending_event_data are like {'dateTime': ISO, 'timeZone': IANA}
-            start_dt_iso = pending_event_data.get('start', {})
-            end_dt_iso = pending_event_data.get('end', {})
+            final_message_to_send = await create_final_message(pending_event_data)
 
-            if not start_dt_iso: raise ValueError("Missing start dateTime in pending event")
-
-            # Construct the detailed confirmation message HERE
-            start_date_time = start_dt_iso.get('dateTime', '')
-            end_date_time = end_dt_iso.get('dateTime', '')
-            final_message_to_send = (
-                f"Okay, I can create this event:\n"
-                f"<b>Summary:</b> {summary}\n"
-                f"<b>Start:</b> {format_to_nice_date(start_date_time)}\n"
-                f"<b>End:</b> {format_to_nice_date(end_date_time)}\n"
-                f"<b>Description:</b> {pending_event_data.get('description', '-')}\n"
-                f"<b>Location:</b> {pending_event_data.get('location', '-')}\n\n"
-                f"Should I add this to your calendar?"
-            )
             keyboard = [[InlineKeyboardButton("✅ Confirm Create", callback_data="confirm_event_create"),
                          InlineKeyboardButton("❌ Cancel Create", callback_data="cancel_event_create")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -530,7 +514,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # 7. Trim history
     if len(chat_history) > config.MAX_HISTORY_MESSAGES:
         context.user_data['lc_history'] = chat_history[-config.MAX_HISTORY_MESSAGES:]
-
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles button presses from inline keyboards."""

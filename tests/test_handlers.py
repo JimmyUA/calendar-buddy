@@ -1,15 +1,14 @@
 # tests/test_handlers.py
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock, call
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from unittest.mock import patch, MagicMock
+from telegram import InlineKeyboardMarkup
 from telegram.ext import ConversationHandler
 from telegram.constants import ParseMode
 
 # Import handlers AFTER fixtures might patch dependencies
-import handlers
 import config
-import google_services as gs  # To mock functions called by handlers
-from .conftest import TEST_USER_ID, TEST_CHAT_ID, TEST_TIMEZONE_STR, TEST_EVENT_ID
+import handlers
+from .conftest import TEST_USER_ID, TEST_TIMEZONE_STR
 
 pytestmark = pytest.mark.asyncio
 
@@ -259,14 +258,23 @@ async def test_handle_message_agent_invoked(mock_update, mock_context, mocker, m
 async def test_handle_message_agent_confirmation_create(mock_update, mock_context, mocker, mock_agent_executor):
     user_message = "Schedule lunch Monday 12pm"
     # Simulate the agent returning the confirmation question from the create tool
-    confirmation_question = f"""Okay, I can create this event:
-<b>Summary:</b> Lunch
-<b>Start:</b> Sunday, 18 May 2025 · 12:33
-<b>End:</b> Sunday, 18 May 2025 · 13:33
-<b>Description:</b> -
-<b>Location:</b> -
+#     confirmation_question = f"""Okay, I can create this event:
+# <b>Summary:</b> Lunch
+# <b>Start:</b> Sunday, 18 May 2025 · 12:33
+# <b>End:</b> Sunday, 18 May 2025 · 13:33
+# <b>Description:</b> -
+# <b>Location:</b> -
+#
+# Should I add this to your calendar?"""
 
-Should I add this to your calendar?"""
+    confirmation_question = (f"Okay, I can create this event for you:\n\n"
+                             f"✨ <b>Lunch</b> ✨\n\n"  # Emphasized Summary/Title
+                             f"📅 <b><u>Event Details</u></b>\n"
+                             f"<b>Start:</b>       <code>Sunday, 18 May 2025 · 12:33</code>\n"
+                             f"<b>End:</b>         <code>Sunday, 18 May 2025 · 13:33</code>\n"
+                             f"<b>Description:</b> <i>-</i>\n"
+                             f"<b>Location:</b>    <i>-</i>\n\n"
+                             f"Ready to add this to your Google Calendar?")
     agent_response_text = confirmation_question  # Agent's final output IS the question
 
     mock_update.set_message_text(user_message)
@@ -278,7 +286,8 @@ Should I add this to your calendar?"""
 
     # Simulate that the *tool run* (mocked within agent execution usually)
     # placed data into the config pending state before agent finished
-    mock_event_data = {'summary': 'Lunch', 'start': {'dateTime': '2025-05-18T12:33:00+02:00', 'timeZone': 'Europe/Amsterdam'},
+    mock_event_data = {'summary': 'Lunch',
+                       'start': {'dateTime': '2025-05-18T12:33:00+02:00', 'timeZone': 'Europe/Amsterdam'},
                        'end': {'dateTime': '2025-05-18T13:33:00+02:00', 'timeZone': 'Europe/Amsterdam'}, }  # Example
     config.pending_events[TEST_USER_ID] = mock_event_data  # Manually set state for test
 

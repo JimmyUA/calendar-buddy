@@ -9,11 +9,11 @@ from telegram.ext import (
     MessageHandler,
     CallbackQueryHandler,
     filters,
-    ContextTypes, ConversationHandler,
+    ConversationHandler,
 )
 from handlers import ASKING_TIMEZONE
 import config # Load config first (initializes Firestore, etc.)
-import handlers # Import our handler functions
+import handlers
 
 # Enable logging
 logging.basicConfig(
