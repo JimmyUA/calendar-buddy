@@ -1,176 +1,162 @@
+import html
 import logging
 import urllib.parse
 from datetime import datetime, timedelta
-from dateutil.relativedelta import relativedelta # For duration
 
 # Timezone libraries
 import pytz
 from dateutil import parser as dateutil_parser
+from dateutil.relativedelta import relativedelta  # For duration
 from pytz.exceptions import UnknownTimeZoneError
 
 logger = logging.getLogger(__name__)
 
-def parse_and_format_event_time(event_data: dict, user_tz: pytz.BaseTzInfo) -> dict | None:
-    """
-    Parses Google Calendar event time data and returns structured, timezone-aware info.
 
-    Returns:
-        A dictionary like:
-        {
-            'is_all_day': bool,
-            'start_dt': datetime, # Timezone-aware in user_tz
-            'end_dt': datetime,   # Timezone-aware in user_tz
-            'time_str': str,    # Pre-formatted basic time string
-            'duration_str': str # Optional: Human-readable duration
-        }
-        or None if parsing fails.
-    """
+def parse_and_format_event_time(event_data: dict, user_tz: pytz.BaseTzInfo) -> dict | None:
     start_info = event_data.get('start', {})
     end_info = event_data.get('end', {})
+    start_val = start_info.get('dateTime', start_info.get('date'))
+    end_val = end_info.get('dateTime', end_info.get('date'))
 
-    start_str = start_info.get('dateTime', start_info.get('date'))
-    end_str = end_info.get('dateTime', end_info.get('date'))
-
-    if not start_str:
-        logger.warning(f"Event missing start date/time info. Event ID: {event_data.get('id')}")
+    if not start_val:
         return None
 
     try:
         is_all_day = 'date' in start_info
-        start_dt_aware = None
-        end_dt_aware = None
-        time_str = ""
-        duration_str = ""
 
         if is_all_day:
-            start_dt_naive = dateutil_parser.isoparse(start_str).date()
-            # For calculation/comparison, treat all-day start/end as start of day in user's TZ
-            start_dt_aware = user_tz.localize(datetime.combine(start_dt_naive, datetime.min.time()))
-            # Google's all-day end date is exclusive
-            end_dt_naive = dateutil_parser.isoparse(end_info.get('date', start_str)).date()  # Use start if end missing
-            # Treat end as start of the *next* day in UTC for duration calc, then convert
-            end_dt_for_calc = datetime.combine(end_dt_naive, datetime.min.time())
-            end_dt_aware = user_tz.localize(end_dt_for_calc)  # End is start of next day
+            start_date_obj = dateutil_parser.isoparse(start_val).date()
+            # For display, the event "occurs" on this start_date_obj in the user's view
+            start_dt_aware_for_display = user_tz.localize(datetime.combine(start_date_obj, datetime.min.time()))
+            # For grouping, use this localized start
+            start_dt_for_grouping = start_dt_aware_for_display
 
-            num_days = (end_dt_naive - start_dt_naive).days
-            if num_days <= 1:
-                time_str = f"{start_dt_naive.strftime('%a, %b %d')} (All Day)"
-                duration_str = "All day"
-            else:
-                # Display end date is one day prior to exclusive date
-                display_end_dt = end_dt_naive - timedelta(days=1)
-                time_str = f"{start_dt_naive.strftime('%a, %b %d')} - {display_end_dt.strftime('%a, %b %d')} (All Day)"
-                duration_str = f"{num_days} days"
+            duration_str = ""  # Usually no duration shown for all-day events like "(1 day)"
+
+            if end_val:
+                end_date_obj_exclusive = dateutil_parser.isoparse(end_val).date()
+                # Calculate the number of days the event spans
+                # For Google Calendar, an event from 2025-07-04 to 2025-07-05 is a 1-day event on July 4th.
+                # An event from 2025-07-04 to 2025-07-06 is a 2-day event on July 4th and July 5th.
+                num_days = (end_date_obj_exclusive - start_date_obj).days
+
+                if num_days <= 1:  # Single all-day event
+                    time_str = f"{start_dt_aware_for_display.strftime('%A, %d %B %Y')} (All Day)"
+                else:  # Multi-day all-day event
+                    # The actual last day of the event is one day before the exclusive end date
+                    display_end_date_obj = end_date_obj_exclusive - timedelta(days=1)
+                    display_end_dt_aware = user_tz.localize(datetime.combine(display_end_date_obj, datetime.min.time()))
+                    time_str = f"{start_dt_aware_for_display.strftime('%A, %d %B %Y')} - {display_end_dt_aware.strftime('%A, %d %B %Y')} (All Day)"
+            else:  # Should not happen if Google API is consistent, but defensive
+                time_str = f"{start_dt_aware_for_display.strftime('%A, %d %B %Y')} (All Day)"
 
         else:  # Timed event
-            if not end_str: end_str = start_str  # Should not happen, but fallback
-
-            start_dt_aware = dateutil_parser.isoparse(start_str).astimezone(user_tz)
-            end_dt_aware = dateutil_parser.isoparse(end_str).astimezone(user_tz)
-
-            start_fmt = start_dt_aware.strftime('%I:%M %p')  # Time only
-            end_fmt = end_dt_aware.strftime('%I:%M %p %Z')  # Time + Zone
-
+            start_dt_aware = dateutil_parser.isoparse(start_val).astimezone(user_tz)
+            start_dt_for_grouping = start_dt_aware  # Use the actual aware time for grouping
+            end_dt_aware = dateutil_parser.isoparse(end_val).astimezone(user_tz)
+            # ... (rest of your existing timed event logic for time_str and duration_str) ...
+            # Format for display
             if start_dt_aware.date() == end_dt_aware.date():
-                time_str = f"{start_dt_aware.strftime('%a, %b %d')}, {start_fmt} - {end_fmt}"
-            else:
-                # Multi-day timed event
-                start_fmt_full = start_dt_aware.strftime('%a, %b %d, %I:%M %p %Z')
-                end_fmt_full = end_dt_aware.strftime('%a, %b %d, %I:%M %p %Z')
-                time_str = f"{start_fmt_full} - {end_fmt_full}"
+                time_str = f"{start_dt_aware.strftime('%I:%M %p')} - {end_dt_aware.strftime('%I:%M %p %Z')}"
+            else:  # Spans multiple days
+                time_str = f"{start_dt_aware.strftime('%a, %b %d, %I:%M %p %Z')} - {end_dt_aware.strftime('%a, %b %d, %I:%M %p %Z')}"
 
             # Calculate duration
             delta = relativedelta(end_dt_aware, start_dt_aware)
             parts = []
             if delta.years: parts.append(f"{delta.years}y")
             if delta.months: parts.append(f"{delta.months}m")
-            if delta.days: parts.append(f"{delta.days}d")
+            if delta.days and (
+                    delta.years or delta.months or delta.days > 0 or start_dt_aware.date() != end_dt_aware.date()):
+                parts.append(f"{delta.days}d")
             if delta.hours: parts.append(f"{delta.hours}h")
             if delta.minutes: parts.append(f"{delta.minutes}min")
-            duration_str = " ".join(parts) if parts else ""
+            duration_str = f"({', '.join(parts)})" if parts else ""
 
         return {
             'is_all_day': is_all_day,
-            'start_dt': start_dt_aware,
-            'end_dt': end_dt_aware,
-            'time_str': time_str.strip(),
-            'duration_str': duration_str.strip()
+            'start_dt_for_grouping': start_dt_for_grouping,
+            'time_display_str': time_str.strip(),
+            'duration_display_str': duration_str.strip()
         }
-
     except Exception as e:
-        logger.error(
-            f"Error parsing/formatting event time: {e}. Event ID: {event_data.get('id')}, Start: '{start_str}', End: '{end_str}'",
-            exc_info=True)
-        return None  # Indicate failure
+        logger.error(f"Error in parse_and_format_event_time: {e}", exc_info=True)
+        return {'time_display_str': '[Time Error]', 'duration_display_str': '',
+                'start_dt_for_grouping': datetime.now(pytz.utc)}
 
 # --- NEW Formatting Function ---
 def format_event_list_for_agent(events: list, time_period_str: str, user_timezone_str: str,
                                 include_ids: bool = False) -> str:
-    """Formats a list of events into a readable string for the agent/user."""
     if not events:
-        return f"No events found for '{time_period_str}'."
+        return f"<i>No events scheduled for {html.escape(time_period_str)}.</i>"
 
     try:
         user_tz = pytz.timezone(user_timezone_str)
     except UnknownTimeZoneError:
+        logger.warning(f"Invalid user timezone '{user_timezone_str}', defaulting to UTC.")
         user_tz = pytz.utc
+        user_timezone_str = "UTC"  # Update for display
 
-    output_lines = [f"🗓️ Events for {time_period_str} (Times in {user_timezone_str}):\n"]  # Add newline
+    # Sanitize time_period_str for the header (it might come from user input via LLM)
+    # Example: "for 'May 19, 2025 to May 25, 2025'" -> "May 19 - May 25, 2025"
+    display_period = time_period_str.replace("for '", "").replace("'", "").replace(" to ", " - ")
+    if "matching" in display_period.lower():  # Handle search result context
+        display_period = f"matching search: {display_period.split('matching ')[-1]}"
+
+    output_lines = [
+        f"🗓️ <b>Your Schedule: {html.escape(display_period)}</b>",
+        f"<pre>   </pre><i>(Times in {html.escape(user_timezone_str)})</i>\n"  # Newline after for spacing
+    ]
     current_day_str = None
 
-    # Sort events just in case (API usually returns sorted)
+    # Sort events by start time
     events.sort(key=lambda e: e.get('start', {}).get('dateTime', e.get('start', {}).get('date', '')))
 
-    for event in events:
-        summary = event.get('summary', 'No Title')
-        location = event.get('location')
-        event_id = event.get('id')  # Keep ID for search results
+    for event_data in events:
+        summary = html.escape(event_data.get('summary', 'No Title'))
+        location = event_data.get('location')
+        event_id = event_data.get('id')
 
-        time_info = parse_and_format_event_time(event, user_tz)
+        time_info = parse_and_format_event_time(event_data, user_tz)
+        if not time_info:  # Should be handled by parse_and_format_event_time returning a default
+            parsed_time_str = "[Error processing time]"
+            parsed_duration_str = ""
+            event_start_dt = datetime.now(user_tz)  # Fallback for grouping
+        else:
+            parsed_time_str = time_info['time_display_str']
+            parsed_duration_str = time_info['duration_display_str']
+            event_start_dt = time_info['start_dt_for_grouping']
 
-        if not time_info:
-            # Handle parsing error for this specific event
-            start_str = event.get('start', {}).get('dateTime', event.get('start', {}).get('date', '[No Start]'))
-            output_lines.append(f"- **{summary}** (Time Error: {start_str})")
-            continue
+        day_str_for_grouping = event_start_dt.strftime('%a, %B %d, %Y')  # More readable day string
+        # Day Separator
+        if day_str_for_grouping != current_day_str:
+            output_lines.append("━━━━━━━━━━━━━━━━━━━━━━")  # Or use <hr> if you test its rendering
+            output_lines.append(f"🗓️ <b>{html.escape(day_str_for_grouping)}</b>")
+            output_lines.append("━━━━━━━━━━━━━━━━━━━━━━")
+            current_day_str = day_str_for_grouping
 
-        # --- Group by Day ---
-        day_str = time_info['start_dt'].strftime('%a, %b %d, %Y')
-        if day_str != current_day_str:
-            output_lines.append(f"\n--- {day_str} ---")  # Add separator
-            current_day_str = day_str
+        # Event Item
+        output_lines.append(f"  ✨ <b>{summary}</b>")  # Intend with spaces
+        if parsed_time_str:
+            time_line = f"<pre>    </pre>⏰ <i>{html.escape(parsed_time_str)}"  # Use <pre> for indent
+            if parsed_duration_str and not time_info.get('is_all_day'):
+                time_line += f" {html.escape(parsed_duration_str)}"
+            time_line += "</i>"
+            output_lines.append(time_line)
 
-        # --- Format Event Line ---
-        line = f"- **{summary}**"  # Bold summary
-        line += f"\n  ⏰ {time_info['time_str']}"  # Time info
-        if time_info['duration_str'] and not time_info['is_all_day']:
-            line += f" ({time_info['duration_str']})"  # Add duration
-            # Location with Google Maps Link
         if location:
-            # URL Encode the location string for the query parameter
             encoded_location = urllib.parse.quote_plus(location)
             maps_url = f"https://www.google.com/maps/search/?api=1&query={encoded_location}"
-            # Create HTML link
-            line += f'\n  📍 <a href="{maps_url}">{location}</a>'
-        # Add ID only if needed (e.g., for search results)
-        # Optional Event ID
+            output_lines.append(f'<pre>    </pre>📍 <a href="{maps_url}">{html.escape(location)}</a>')
+
         if include_ids and event_id:
-            line += f"\n  🆔 <code>{event_id}</code>"  # Use HTML code tag
+            output_lines.append(f"<pre>    </pre>🆔 <code>{html.escape(event_id)}</code>")
 
-        output_lines.append(line)
+        output_lines.append("")  # Add a blank line for spacing between events within the same day
 
-        # Check if output_lines only contains the initial header
-        if len(output_lines) <= 1:
-            logger.warning(f"Event formatting resulted in no event lines being added. Initial header: {output_lines}")
-            # Return the "No events found" message instead of just the header
-            return f"No events found {time_period_str} (or failed to format events)."
+    # Remove last blank line if added
+    if output_lines and output_lines[-1] == "":
+        output_lines.pop()
 
-    # Join lines, ensuring proper spacing after day separators
-    formatted_output = ""
-    for i, line in enumerate(output_lines):
-        if line.startswith("---") and i > 1 and not output_lines[i - 1].strip() == "":
-            formatted_output += "\n"  # Add extra newline before date separator
-        formatted_output += line + "\n"
-
-    return formatted_output.strip()
+    return "\n".join(output_lines)
 
