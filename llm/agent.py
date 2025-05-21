@@ -1,5 +1,6 @@
 # agent.py
 import logging
+import base64 # Import base64 for image encoding
 # Langchain Imports
 from langchain_google_genai import ChatGoogleGenerativeAI
 # --> Import ReAct specific formatting helper <--
@@ -93,9 +94,56 @@ def initialize_agent(user_id: int, user_timezone_str: str, chat_history: list) -
     # 5. Create Memory object
     memory_messages = []
     for msg in chat_history:
-        role = msg.get("role"); content = msg.get("content", "")
-        if role == "user": memory_messages.append(HumanMessage(content=content))
-        elif role == "model": memory_messages.append(AIMessage(content=content))
+        role = msg.get("role")
+        parts = msg.get("parts", [])
+        langchain_message_content = []
+
+        if not parts: # Should not happen if handlers.py is correct
+            logger.warning(f"Encountered a message with no parts in chat_history: {msg}")
+            # Fallback for old format or error: use 'content' if available
+            content_fallback = msg.get("content")
+            if content_fallback:
+                langchain_message_content.append({'type': 'text', 'text': content_fallback})
+            else:
+                continue # Skip this message if no parts and no content
+
+        for part in parts:
+            part_type = part.get("type")
+            if part_type == "text":
+                langchain_message_content.append({"type": "text", "text": part.get("text", "")})
+            elif part_type == "image":
+                source = part.get("source", {})
+                image_bytes = source.get("data")
+                mime_type = source.get("media_type", "image/jpeg") # Default to jpeg
+                if image_bytes and isinstance(image_bytes, bytes):
+                    encoded_image = base64.b64encode(image_bytes).decode('utf-8')
+                    langchain_message_content.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{mime_type};base64,{encoded_image}"}
+                    })
+                else:
+                    logger.warning(f"Image part missing data or data is not bytes: {part}")
+            else:
+                logger.warning(f"Unknown part type encountered: {part_type} in message: {msg}")
+
+        if not langchain_message_content: # If after processing parts, content is still empty
+            logger.warning(f"Message content is empty after processing parts for: {msg}")
+            continue
+
+        if role == "user":
+            memory_messages.append(HumanMessage(content=langchain_message_content))
+        elif role == "model":
+            # For AIMessage, if content is just a single text string, pass it directly
+            # Otherwise, pass the list of parts.
+            # For now, model responses are text only, so this simplifies it.
+            # If future AI responses are multimodal, this logic might need adjustment
+            # based on how AIMessage handles lists of content parts.
+            if len(langchain_message_content) == 1 and langchain_message_content[0]["type"] == "text":
+                memory_messages.append(AIMessage(content=langchain_message_content[0]["text"]))
+            else:
+                # This case is for future-proofing if AI can send multiple parts (e.g. text and image)
+                # Or if a text message was incorrectly structured as multiple text parts.
+                memory_messages.append(AIMessage(content=langchain_message_content))
 
     k_turns = getattr(config, 'MAX_HISTORY_TURNS', 10)
     memory = ConversationBufferWindowMemory(
