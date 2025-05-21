@@ -105,7 +105,7 @@ def format_event_list_for_agent(events: list, time_period_str: str, user_timezon
 
     output_lines = [
         f"🗓️ <b>Your Schedule: {html.escape(display_period)}</b>",
-        f"<pre>   </pre><i>(Times in {html.escape(user_timezone_str)})</i>\n"  # Newline after for spacing
+        f"<i>(Times in {html.escape(user_timezone_str)})</i>\n"  # Newline after for spacing
     ]
     current_day_str = None
 
@@ -138,7 +138,7 @@ def format_event_list_for_agent(events: list, time_period_str: str, user_timezon
         # Event Item
         output_lines.append(f"  ✨ <b>{summary}</b>")  # Intend with spaces
         if parsed_time_str:
-            time_line = f"<pre>    </pre>⏰ <i>{html.escape(parsed_time_str)}"  # Use <pre> for indent
+            time_line = f"⏰ <i>{html.escape(parsed_time_str)}"  # Use <pre> for indent
             if parsed_duration_str and not time_info.get('is_all_day'):
                 time_line += f" {html.escape(parsed_duration_str)}"
             time_line += "</i>"
@@ -147,10 +147,7 @@ def format_event_list_for_agent(events: list, time_period_str: str, user_timezon
         if location:
             encoded_location = urllib.parse.quote_plus(location)
             maps_url = f"https://www.google.com/maps/search/?api=1&query={encoded_location}"
-            output_lines.append(f'<pre>    </pre>📍 <a href="{maps_url}">{html.escape(location)}</a>')
-
-        if include_ids and event_id:
-            output_lines.append(f"<pre>    </pre>🆔 <code>{html.escape(event_id)}</code>")
+            output_lines.append(f'📍 <a href="{maps_url}">{html.escape(location)}</a>')
 
         output_lines.append("")  # Add a blank line for spacing between events within the same day
 

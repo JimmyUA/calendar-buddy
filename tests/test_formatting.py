@@ -182,7 +182,7 @@ def test_format_event_list_for_agent_with_events(sample_events):
 
     # General Header
     assert "🗓️ <b>Your Schedule: next week</b>" in formatted_str
-    assert f"<pre>   </pre><i>(Times in {USER_TZ_STR_AMS})</i>" in formatted_str
+    assert f"<i>(Times in {USER_TZ_STR_AMS})</i>" in formatted_str
 
     # Day Separators (check presence and basic format)
     assert "🗓️ <b>Tue, June 10, 2025</b>" in formatted_str
@@ -226,15 +226,13 @@ def test_format_event_list_for_agent_different_timezone(sample_events):
     print(f"\n---Formatted Output for Los Angeles---\n{formatted_str}\n---------------------------------")
 
     assert "🗓️ <b>Your Schedule: upcoming</b>" in formatted_str
-    assert f"<pre>   </pre><i>(Times in {USER_TZ_STR_LA})</i>" in formatted_str
+    assert f"<i>(Times in {USER_TZ_STR_LA})</i>" in formatted_str
 
     assert "🗓️ <b>Tue, June 10, 2025</b>" in formatted_str # Day grouping based on LA time
     assert "✨ <b>Team Offsite</b>" in formatted_str
     assert "<i>Tuesday, 10 June 2025 (All Day)</i>" in formatted_str
     assert "✨ <b>Project Alpha Sync</b>" in formatted_str
     assert "<i>07:00 AM - 08:30 AM PDT (1h, 30min)</i>" in formatted_str
-    assert "<code>event1</code>" not in formatted_str # include_ids is False
-    assert "<code>event2</code>" not in formatted_str
 
     assert "🗓️ <b>Thu, June 12, 2025</b>" in formatted_str # Event 3
     assert "<i>02:00 AM - 03:00 AM PDT (1h)</i>" in formatted_str # For Event 3
