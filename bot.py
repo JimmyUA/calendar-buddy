@@ -99,7 +99,7 @@ def main() -> None:
     application.add_handler(CallbackQueryHandler(handlers.button_callback))
 
     # Message Handler (now invokes the agent)
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.handle_message))
+    application.add_handler(MessageHandler((filters.TEXT | filters.PHOTO) & ~filters.COMMAND, handlers.handle_message))
 
     # Error Handler (Register last)
     application.add_error_handler(handlers.error_handler)

@@ -391,12 +391,33 @@ async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles non-command messages by invoking the LangChain agent."""
-    if not update.message or not update.message.text:
-        logger.warning("handle_message received update without message text.")
+    if not update.message or (not update.message.text and not update.message.photo):
+        logger.warning("handle_message received update without text or photo.")
         return
+
     user_id = update.effective_user.id
-    text = update.message.text
-    logger.info(f"Agent Handler: Received message from user {user_id}: '{text[:50]}...'")
+    text = update.message.text  # Might be None if only photo
+    caption = update.message.caption # Might be None
+    photo = update.message.photo # Might be None
+
+    # Determine the primary text for agent input and logging
+    input_text_for_agent = ""
+    log_display_text = ""
+
+    if photo:
+        log_display_text = "[PHOTO]"
+        if caption:
+            input_text_for_agent = caption
+            log_display_text += f" {caption[:40]}..."
+        else:
+            # If there's a photo but no caption, agent gets empty string for now.
+            # Or, we could use a placeholder like "[IMAGE]"
+            input_text_for_agent = "" # Or some placeholder if desired by the LLM agent
+    elif text:
+        input_text_for_agent = text
+        log_display_text = text[:50] + "..."
+
+    logger.info(f"Agent Handler: Received message from user {user_id}: '{log_display_text}'")
 
     # 1. Check connection status
     if not gs.is_user_connected(user_id):
@@ -418,10 +439,49 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # 3. Retrieve/Initialize conversation history from context.user_data
     if 'lc_history' not in context.user_data:
         context.user_data['lc_history'] = []
-    chat_history: list[dict] = context.user_data['lc_history']  # Stores {'role': '...', 'content': '...'}
+    chat_history: list[dict] = context.user_data['lc_history']
 
-    # Add current user message to simple history list
-    chat_history.append({'role': 'user', 'content': text})
+    # Prepare parts for the user's message
+    user_message_parts = []
+    image_bytes = None # Initialize image_bytes
+
+    if photo:
+        # As per prompt, use photo[0] for smallest. Consider photo[-1] for largest/best quality.
+        photo_size = update.message.photo[0]
+        try:
+            photo_file = await photo_size.get_file()
+            image_bytearray = await photo_file.download_as_bytearray() # Corrected method name
+            image_bytes = bytes(image_bytearray) # Convert bytearray to bytes for broader compatibility
+            user_message_parts.append({
+                'type': 'image',
+                'source': {
+                    'type': 'bytes', # Or 'base64' if we were to encode it
+                    'media_type': 'image/jpeg', # Assuming JPEG for Telegram photos
+                    'data': image_bytes # Store raw bytes
+                }
+            })
+        except Exception as e:
+            logger.error(f"Failed to download photo for user {user_id}: {e}", exc_info=True)
+            # Optionally inform the user or just proceed without the image
+            await update.message.reply_text("Sorry, I couldn't download the image you sent.")
+            # If image download fails, we might not want to proceed or add it to history.
+            # For now, let's allow it to proceed, and the agent won't see the image.
+
+    # Add text/caption part
+    # If there's a photo, the caption is the relevant text.
+    # If no photo, then message.text is the relevant text.
+    actual_text_content = caption if photo else text
+    if actual_text_content: # Only add text part if there's actual text
+        user_message_parts.insert(0, {'type': 'text', 'text': actual_text_content}) # Insert text before image if both exist
+
+    # Ensure there's something to add to history (e.g. text or successfully downloaded image)
+    if not user_message_parts:
+        logger.warning(f"No content (text or usable photo) to add to history for user {user_id}.")
+        # Potentially pop from history if an empty user message was added before error
+        # This check is now implicitly handled by only adding if user_message_parts is not empty.
+        return # Nothing to process
+
+    chat_history.append({'role': 'user', 'parts': user_message_parts})
 
     # 4. Initialize Agent Executor (with user context and history)
     try:
@@ -437,9 +497,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await update.message.chat.send_action(action="typing")  # Indicate thinking
     try:
         # Use ainvoke for async execution
-        # Input structure depends on the prompt template (e.g., 'input' key)
+        # Input to agent is the primary text (caption or message text)
         response = await agent_executor.ainvoke({
-            "input": text
+            "input": input_text_for_agent # Use the determined text for agent input
             # chat_history is handled by the memory object passed to AgentExecutor
         })
         agent_response = response.get('output', "Sorry, I didn't get a response.")
@@ -509,7 +569,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         disable_web_page_preview=True
     )
     if agent_response and "error" not in agent_response.lower():  # Avoid saving error messages as model response
-        chat_history.append({'role': 'model', 'content': agent_response})
+        chat_history.append({'role': 'model', 'parts': [{'type': 'text', 'text': agent_response}]})
 
     # 7. Trim history
     if len(chat_history) > config.MAX_HISTORY_MESSAGES:
