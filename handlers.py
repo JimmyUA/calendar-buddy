@@ -481,8 +481,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # This check is now implicitly handled by only adding if user_message_parts is not empty.
         return # Nothing to process
 
-    chat_history.append({'role': 'user', 'parts': user_message_parts})
-
+    # chat_history.append({'role': 'user', 'parts': user_message_parts})
+    logger.info('User message parts: %s', user_message_parts)
     # 4. Initialize Agent Executor (with user context and history)
     try:
         # Pass the simple history list; the initialize function converts it for LangChain memory
@@ -499,6 +499,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         logger.info(f"Invoking agent for user {user_id} with input: '{input_text_for_agent}'")
         # Use ainvoke for async execution
         # Input to agent is the primary text (caption or message text)
+        if user_message_parts and user_message_parts[0].get('type') == 'image':
+            # If the first part is an image, we can pass the image bytes directly
+            # The agent should be able to handle image input if designed for it
+            input_text_for_agent = {'text': input_text_for_agent, 'image': user_message_parts[0]['source']['data']}
+
         response = await agent_executor.ainvoke({
             "input": input_text_for_agent # Use the determined text for agent input
             # chat_history is handled by the memory object passed to AgentExecutor
