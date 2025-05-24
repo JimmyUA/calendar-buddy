@@ -496,6 +496,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # 5. Invoke Agent Executor
     await update.message.chat.send_action(action="typing")  # Indicate thinking
     try:
+        logger.info(f"Invoking agent for user {user_id} with input: '{input_text_for_agent}'")
         # Use ainvoke for async execution
         # Input to agent is the primary text (caption or message text)
         response = await agent_executor.ainvoke({
