@@ -300,7 +300,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "- 'What's on my calendar tomorrow?'\n"
         "- 'Show me next week'\n"
         "- 'Schedule lunch with Sarah Tuesday at 1pm'\n"
-        "- 'Delete team meeting Thursday morning'\n\n"  # Added delete example
+        "- 'Delete team meeting Thursday morning'\n"
+        "- Manage your shopping with `/glist_show`\n\n" # Added grocery list example
         "Use /connect_calendar to link your Google Account.\n"
         "Type /help for more commands.",
         disable_web_page_preview=True
@@ -325,6 +326,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     /set_timezone - Set your timezone for accurate event times.
     /disconnect_calendar - Revoke access to your calendar.
     /summary `[time period]` - Explicitly request a summary.
+    /glist_add `<item1> [item2 ...]` - Adds items to your grocery list.
+    /glist_show - Shows your current grocery list.
+    /glist_clear - Clears your entire grocery list.
     /help - Show this help message.
     """
     await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
@@ -638,3 +642,72 @@ async def cancel_timezone(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     logger.info(f"User {user_id} cancelled timezone setting.")
     await update.message.reply_text("Timezone setup cancelled.")
     return ConversationHandler.END
+
+
+# === Grocery List Handlers ===
+
+async def glist_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Adds items to the user's grocery list."""
+    user_id = update.effective_user.id
+    logger.info(f"User {user_id} attempting to add items to grocery list. Args: {context.args}")
+
+    if not context.args:
+        logger.info(f"User {user_id} called /glist_add without items.")
+        await update.message.reply_text(
+            "Please provide items to add. Usage: /glist_add item1 item2 ..."
+        )
+        return
+
+    items_to_add = list(context.args) # context.args is a tuple
+
+    if gs.add_to_grocery_list(user_id, items_to_add):
+        logger.info(f"Successfully added {len(items_to_add)} items for user {user_id}.")
+        await update.message.reply_text(
+            f"Added: {', '.join(items_to_add)} to your grocery list."
+        )
+    else:
+        logger.error(f"Failed to add items to grocery list for user {user_id}.")
+        await update.message.reply_text(
+            "Sorry, there was a problem adding items to your grocery list."
+        )
+
+
+async def glist_show(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Shows the user's grocery list."""
+    user_id = update.effective_user.id
+    logger.info(f"User {user_id} requesting to show grocery list.")
+
+    grocery_list = gs.get_grocery_list(user_id)
+
+    if grocery_list is None:
+        logger.error(f"Failed to retrieve grocery list for user {user_id} (gs returned None).")
+        await update.message.reply_text(
+            "Sorry, there was an error trying to get your grocery list."
+        )
+    elif not grocery_list: # Empty list
+        logger.info(f"Grocery list is empty for user {user_id}.")
+        await update.message.reply_text(
+            "🛒 Your grocery list is empty! Add items with /glist_add item1 item2 ..."
+        )
+    else:
+        logger.info(f"Retrieved {len(grocery_list)} items for user {user_id}.")
+        message_lines = ["🛒 Your Grocery List:"]
+        for item in grocery_list:
+            message_lines.append(f"- {html.escape(item)}") # Escape HTML special chars
+        
+        await update.message.reply_text("\n".join(message_lines), parse_mode=ParseMode.HTML)
+
+
+async def glist_clear(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Clears the user's grocery list."""
+    user_id = update.effective_user.id
+    logger.info(f"User {user_id} requesting to clear grocery list.")
+
+    if gs.delete_grocery_list(user_id):
+        logger.info(f"Successfully cleared grocery list for user {user_id}.")
+        await update.message.reply_text("🗑️ Your grocery list has been cleared.")
+    else:
+        logger.error(f"Failed to clear grocery list for user {user_id}.")
+        await update.message.reply_text(
+            "Sorry, there was a problem clearing your grocery list."
+        )

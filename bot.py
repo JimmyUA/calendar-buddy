@@ -11,7 +11,12 @@ from telegram.ext import (
     filters,
     ConversationHandler,
 )
-from handlers import ASKING_TIMEZONE
+from handlers import (
+    ASKING_TIMEZONE,
+    glist_add,
+    glist_clear,
+    glist_show,
+)
 import config # Load config first (initializes Firestore, etc.)
 import handlers
 
@@ -91,6 +96,11 @@ def main() -> None:
     application.add_handler(CommandHandler("my_status", handlers.my_status))
     application.add_handler(CommandHandler("disconnect_calendar", handlers.disconnect_calendar))
     application.add_handler(CommandHandler("summary", handlers.summary_command))
+
+    # Grocery List Command Handlers
+    application.add_handler(CommandHandler("glist_add", handlers.glist_add))
+    application.add_handler(CommandHandler("glist_show", handlers.glist_show))
+    application.add_handler(CommandHandler("glist_clear", handlers.glist_clear))
 
     # Message Handler (for natural language processing)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.handle_message))

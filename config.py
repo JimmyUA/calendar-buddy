@@ -62,9 +62,10 @@ if FIRESTORE_DB is None:
 FS_COLLECTION_TOKENS = 'user_tokens'
 FS_COLLECTION_STATES = 'oauth_states'
 FS_COLLECTION_PREFS = 'user_preferences' # <--- New collection name
+FS_COLLECTION_GROCERY_LISTS = 'user_grocery_lists'
 
 MAX_HISTORY_TURNS = 8 # Number of turns to keep in memory for conversation context
 MAX_HISTORY_MESSAGES = 8 # Number of turns to keep in memory for conversation context
-print(f"Config loaded. Using Firestore collections: {FS_COLLECTION_TOKENS}, {FS_COLLECTION_STATES}, {FS_COLLECTION_PREFS}")
+print(f"Config loaded. Using Firestore collections: {FS_COLLECTION_TOKENS}, {FS_COLLECTION_STATES}, {FS_COLLECTION_PREFS}, {FS_COLLECTION_GROCERY_LISTS}")
 
 print("Config loaded successfully.")

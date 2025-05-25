@@ -31,6 +31,7 @@ OAUTH_STATES_COLLECTION = db.collection('oauth_states') if db else None
 USER_TOKENS_COLLECTION = db.collection('user_tokens') if db else None
 # ---> NEW: Reference for preferences collection <---
 USER_PREFS_COLLECTION = db.collection(config.FS_COLLECTION_PREFS) if db else None
+FS_COLLECTION_GROCERY_LISTS = db.collection(config.FS_COLLECTION_GROCERY_LISTS) if db else None
 # === Google Authentication & Firestore Persistence ===
 # --- NEW: Get Single Event by ID ---
 async def get_calendar_event_by_id(user_id: int, event_id: str) -> dict | None:
@@ -394,3 +395,70 @@ async def delete_calendar_event(user_id: int, event_id: str) -> tuple[bool, str]
     except Exception as e:
         logger.error(f"Unexpected error deleting event {event_id} for {user_id}: {e}", exc_info=True)
         return False, "An unexpected error occurred while deleting the event."
+
+# === Grocery List Management ===
+
+def get_grocery_list(user_id: int) -> list[str] | None:
+    """Retrieves the user's grocery list from Firestore."""
+    if not FS_COLLECTION_GROCERY_LISTS:
+        logger.error("GS: Firestore FS_COLLECTION_GROCERY_LISTS unavailable for get_grocery_list.")
+        return None
+    user_doc_id = str(user_id)
+    doc_ref = FS_COLLECTION_GROCERY_LISTS.document(user_doc_id)
+    try:
+        snapshot = doc_ref.get()
+        if snapshot.exists:
+            data = snapshot.to_dict()
+            items = data.get('items')
+            if isinstance(items, list):
+                logger.info(f"GS: Retrieved grocery list for user {user_id} with {len(items)} items.")
+                return items
+            else:
+                logger.error(f"GS: 'items' field is not a list for user {user_id} in grocery list. Found: {type(items)}")
+                return None # Or an empty list if preferred for this specific error
+        else:
+            logger.info(f"GS: No grocery list document found for user {user_id}. Returning empty list.")
+            return [] # Return empty list if document doesn't exist
+    except Exception as e:
+        logger.error(f"GS: Error fetching grocery list for user {user_id}: {e}", exc_info=True)
+        return None
+
+def add_to_grocery_list(user_id: int, items_to_add: list[str]) -> bool:
+    """Adds items to the user's grocery list in Firestore."""
+    if not FS_COLLECTION_GROCERY_LISTS:
+        logger.error("GS: Firestore FS_COLLECTION_GROCERY_LISTS unavailable for add_to_grocery_list.")
+        return False
+    if not items_to_add: # Nothing to add
+        logger.info("GS: No items provided to add_to_grocery_list.")
+        return True # Or False, depending on desired behavior for empty input
+
+    user_doc_id = str(user_id)
+    doc_ref = FS_COLLECTION_GROCERY_LISTS.document(user_doc_id)
+    try:
+        # Using set with merge=True and ArrayUnion to add/update items
+        # This creates the document if it doesn't exist, or merges into existing.
+        # ArrayUnion ensures items are added only if they are not already present.
+        doc_ref.set({'items': firestore.ArrayUnion(items_to_add)}, merge=True)
+        logger.info(f"GS: Added/Updated {len(items_to_add)} items to grocery list for user {user_id}.")
+        return True
+    except Exception as e:
+        logger.error(f"GS: Failed to add items to grocery list for user {user_id}: {e}", exc_info=True)
+        return False
+
+def delete_grocery_list(user_id: int) -> bool:
+    """Deletes the user's entire grocery list from Firestore."""
+    if not FS_COLLECTION_GROCERY_LISTS:
+        logger.error("GS: Firestore FS_COLLECTION_GROCERY_LISTS unavailable for delete_grocery_list.")
+        return False
+    user_doc_id = str(user_id)
+    doc_ref = FS_COLLECTION_GROCERY_LISTS.document(user_doc_id)
+    try:
+        # delete() does not raise an error if the document does not exist.
+        doc_ref.delete()
+        logger.info(f"GS: Attempted deletion of grocery list for user {user_id}.")
+        # To confirm it was deleted, we could try a get(), but for this function,
+        # simply calling delete is often sufficient and idempotent.
+        return True
+    except Exception as e:
+        logger.error(f"GS: Error deleting grocery list for user {user_id}: {e}", exc_info=True)
+        return False
