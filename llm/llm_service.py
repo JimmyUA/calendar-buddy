@@ -491,3 +491,293 @@ async def extract_create_args_llm(event_description: str, current_time_iso: str,
         logger.info(f"LLM Create Args Result: {event_data}")
         return event_data
     except Exception as e: logger.error(f"LLM Service (Create Args) Error: {e}", exc_info=True); return None
+
+
+async def extract_update_search_and_changes(
+    natural_language_input: str,
+    current_time_iso: str,
+    # user_id: int | None = None # Optional: if _get_llm_json_response needs it
+) -> dict | None:
+    """
+    Uses an LLM to extract event search criteria and a description of changes
+    from a natural language request.
+
+    Args:
+        natural_language_input: The user's raw request string.
+        current_time_iso: The current time in ISO format for context.
+        # user_id: Optional user ID for logging or context in LLM calls.
+
+    Returns:
+        A dictionary with "search_query", "changes_description",
+        "search_start_iso", and "search_end_iso", or None if parsing fails.
+    """
+    if not llm_available or not gemini_model:
+        logger.error("LLM Service (Extract Update Search/Changes): LLM not available.")
+        return None
+        
+    logger.info(f"LLMService: Extracting update search/changes from: '{natural_language_input[:100]}...'")
+
+    prompt = f"""
+Given the user's request: "{natural_language_input}"
+And the current time for context: {current_time_iso} (user's local time where the request is made)
+
+Your task is to analyze the request and extract the following information:
+1.  `search_query`: Identify the part of the request that describes the original event the user wants to update. This could be based on title, time, attendees, or a combination. Formulate a concise search query string that can be used to find this event in a calendar. For example, if the user says "my meeting with John tomorrow at 2pm", the search_query could be "meeting with John 2pm tomorrow".
+2.  `changes_description`: Identify the part of the request that describes the *desired changes* to the event. For example, if the user says "change my meeting with John tomorrow at 2pm to 3pm and add project docs", the changes_description would be "change to 3pm and add project docs".
+3.  `search_start_iso` (optional): If the user's request implies a specific date or a narrow time window for the *original* event (e.g., "my meeting *tomorrow*", "the event on *July 10th*"), provide the start of this window as an ISO 8601 datetime string. If the request is vague about the original event's timing (e.g., "my weekly sync"), set this to null.
+4.  `search_end_iso` (optional): If `search_start_iso` is provided, also provide the end of that specific search window as an ISO 8601 datetime string. This helps narrow down the search for the original event. If `search_start_iso` is null, this should also be null.
+
+Return ONLY a JSON object with the following keys: "search_query", "changes_description", "search_start_iso", "search_end_iso".
+Ensure `search_start_iso` and `search_end_iso` are null if no specific time window for the original event is mentioned.
+
+Example 1:
+User request: "Reschedule my meeting with Bob from 3pm today to 4pm and change location to Main Hall."
+Current time: 2024-03-15T10:00:00-04:00
+Output:
+{{
+    "search_query": "meeting with Bob 3pm today",
+    "changes_description": "Reschedule to 4pm and change location to Main Hall",
+    "search_start_iso": "2024-03-15T00:00:00-04:00",
+    "search_end_iso": "2024-03-15T23:59:59-04:00"
+}}
+
+Example 2:
+User request: "Update the 'Project Alpha Review' event. Add 'Review slides before meeting' to the description."
+Current time: 2024-03-15T10:00:00-04:00
+Output:
+{{
+    "search_query": "Project Alpha Review",
+    "changes_description": "Add 'Review slides before meeting' to the description.",
+    "search_start_iso": null,
+    "search_end_iso": null
+}}
+
+Example 3:
+User request: "Need to change my workout session next Monday. Move it from 9am to 10am."
+Current time: 2024-03-15T10:00:00-04:00 (Friday)
+Output:
+{{
+    "search_query": "workout session next Monday 9am",
+    "changes_description": "Move it to 10am.",
+    "search_start_iso": "2024-03-18T00:00:00-04:00",
+    "search_end_iso": "2024-03-18T23:59:59-04:00"
+}}
+"""
+
+    try:
+        logger.debug(f"LLMService: Sending prompt for extract_update_search_and_changes: {prompt[:300]}...")
+        response = await gemini_model.generate_content_async(prompt)
+
+        if response.prompt_feedback and response.prompt_feedback.block_reason:
+            logger.warning(f"LLMService: Call blocked for extract_update_search_and_changes: {response.prompt_feedback.block_reason}")
+            return None
+        if not hasattr(response, 'text'):
+            logger.warning("LLMService: Response for extract_update_search_and_changes missing 'text'.")
+            return None
+            
+        response_data = _parse_llm_json_output(response.text)
+
+        if response_data and \
+           isinstance(response_data.get("search_query"), str) and \
+           isinstance(response_data.get("changes_description"), str):
+            # search_start_iso and search_end_iso can be None, so check type if not None
+            start_iso = response_data.get("search_start_iso")
+            end_iso = response_data.get("search_end_iso")
+            if (start_iso is not None and not isinstance(start_iso, str)) or \
+               (end_iso is not None and not isinstance(end_iso, str)):
+                logger.warning(f"LLMService: Invalid ISO date string types for search window. Start: {type(start_iso)}, End: {type(end_iso)}. Data: {response_data}")
+                # Allow nulls, but if present, must be string.
+                # If they are present and not strings, this indicates an LLM formatting error.
+                return None 
+
+            # Further validation for ISO format if dates are present
+            if start_iso:
+                try: dateutil_parser.isoparse(start_iso)
+                except ValueError: logger.warning(f"LLMService: search_start_iso is not a valid ISO string: {start_iso}"); return None
+            if end_iso:
+                try: dateutil_parser.isoparse(end_iso)
+                except ValueError: logger.warning(f"LLMService: search_end_iso is not a valid ISO string: {end_iso}"); return None
+            
+            if start_iso and not end_iso:
+                logger.warning(f"LLMService: search_start_iso provided but search_end_iso is missing. Data: {response_data}")
+                return None # If start is provided, end should also be.
+            if not start_iso and end_iso: # Less likely but good to check
+                logger.warning(f"LLMService: search_end_iso provided but search_start_iso is missing. Data: {response_data}")
+                return None
+
+
+            logger.info(f"LLMService: Successfully extracted search/changes: {response_data}")
+            return response_data
+        else:
+            logger.warning(f"LLMService: Failed to extract necessary fields or wrong types. Response: {response_data}")
+            return None
+    except GoogleAPIError as api_err:
+        logger.error(f"LLMService (Extract Update Search/Changes): Google API Error - {api_err}", exc_info=False)
+        return None
+    except Exception as e:
+        logger.error(f"LLMService: Error during LLM call for extract_update_search_and_changes: {e}", exc_info=True)
+        return None
+
+
+async def extract_calendar_update_details_llm(
+    natural_language_changes: str,
+    original_event_details: dict,
+    current_time_iso: str,
+    user_timezone_str: str,
+    # user_id: int | None = None # Optional for LLM call context
+) -> dict | None:
+    """
+    Uses an LLM to convert natural language event changes into a structured
+    dictionary suitable for the Google Calendar API (patch).
+
+    Args:
+        natural_language_changes: The string describing the changes (e.g., "move to 4pm and call it 'New Title'").
+        original_event_details: The full dictionary of the original event, providing context.
+        current_time_iso: The current time in ISO format.
+        user_timezone_str: The user's IANA timezone string (e.g., "America/New_York").
+        # user_id: Optional user ID for logging or LLM context.
+
+    Returns:
+        A dictionary containing only the fields to be updated (e.g., {"summary": "New Title", "start": {"dateTime": ..., "timeZone": ...}}),
+        or None if parsing fails or no valid changes are extracted.
+    """
+    if not llm_available or not gemini_model:
+        logger.error("LLM Service (Extract Update Details): LLM not available.")
+        return None
+
+    logger.info(f"LLMService: Extracting structured update from NL changes: '{natural_language_changes[:100]}...' for event ID {original_event_details.get('id')}")
+
+    # Prepare a simplified version of the original event for the prompt,
+    # including only potentially relevant fields for context.
+    original_event_context = {
+        "summary": original_event_details.get("summary"),
+        "start": original_event_details.get("start"),
+        "end": original_event_details.get("end"),
+        "description": original_event_details.get("description"),
+        "location": original_event_details.get("location"),
+    }
+    # Ensure no None values are passed to json.dumps to avoid 'null' strings where not desired by prompt,
+    # or ensure prompt handles 'null' appropriately. For this prompt, seems okay.
+    original_event_context_json = json.dumps(original_event_context, indent=2)
+
+    prompt = f"""
+You are a helpful AI assistant that converts natural language descriptions of event changes into a structured JSON format suitable for updating a Google Calendar event via a PATCH request.
+
+Context:
+- User's timezone: {user_timezone_str}
+- Current time: {current_time_iso}
+- Original event details (for context, especially for relative changes like "move it one hour later"):
+{original_event_context_json}
+
+User's desired changes: "{natural_language_changes}"
+
+Your task is to analyze the "User's desired changes" and produce a JSON object containing *only* the fields that need to be updated.
+- If a field is not mentioned as changed, do not include it in the output.
+- For `start` and `end` times:
+    - If the change involves a specific time (e.g., "to 3pm", "at 10:30 AM"), output the full ISO 8601 `dateTime` string.
+    - The `dateTime` string MUST be in UTC if it's for an all-day event modification or if no specific time is given for a date change, OR it should be in the user's local timezone if a specific time of day is provided. Better yet, always include the correct offset for the user's timezone.
+    - Crucially, if you output a `dateTime` field for `start` or `end`, you MUST also include a `timeZone` field with the value `{user_timezone_str}`. For example: `{{"start": {{"dateTime": "YYYY-MM-DDTHH:mm:ss[+/-HH:mm]", "timeZone": "{user_timezone_str}"}}}}`.
+    - If the user says something like "move it one hour later", calculate the new time based on the original event's start time and the user's timezone.
+    - If only a date is mentioned (e.g., "move to tomorrow"), and the original was a timed event, assume the same time of day in the user's timezone unless specified otherwise. If the original was an all-day event, the update should also be for a date.
+    - If the user wants to change an event to be all-day, the format should be `{{"start": {{"date": "YYYY-MM-DD"}}, "end": {{"date": "YYYY-MM-DD"}}}}` (end date is exclusive for all-day events, usually one day after start for a single all-day event).
+- For `summary`, `description`, `location`: these should be strings.
+- If a field is explicitly being cleared (e.g., "remove the location"), set its value to `null` if the API supports that for PATCH, or an empty string `""` if appropriate. For this task, prefer empty string for text fields and `null` for complex objects if clearing is intended (though the examples focus on setting new values).
+
+Output ONLY the JSON object representing the delta/changes. Do not include fields that are not changing.
+
+Example 1:
+User's desired changes: "Change summary to 'Updated Meeting Title' and move it to tomorrow 4pm."
+Original event start: "2024-03-15T15:00:00-04:00" (3 PM in user's timezone America/New_York)
+Current time: "2024-03-15T10:00:00-04:00"
+User timezone: "America/New_York"
+Output:
+{{
+    "summary": "Updated Meeting Title",
+    "start": {{"dateTime": "2024-03-16T16:00:00-04:00", "timeZone": "America/New_York"}},
+    "end": {{"dateTime": "2024-03-16T17:00:00-04:00", "timeZone": "America/New_York"}} // Assuming 1hr duration from original
+}}
+
+Example 2:
+User's desired changes: "Add 'Project discussion' to the description."
+Output:
+{{
+    "description": "Project discussion"
+}}
+
+Example 3:
+User's desired changes: "Set location to 'Room 101'."
+Output:
+{{
+    "location": "Room 101"
+}}
+
+Example 4 (relative time change):
+User's desired changes: "Delay it by 2 hours."
+Original event start: "2024-03-15T15:00:00-04:00" (3 PM America/New_York)
+User timezone: "America/New_York"
+Output:
+{{
+    "start": {{"dateTime": "2024-03-15T17:00:00-04:00", "timeZone": "America/New_York"}},
+    "end": {{"dateTime": "2024-03-15T18:00:00-04:00", "timeZone": "America/New_York"}} // Assuming 1hr duration
+}}
+"""
+
+    try:
+        logger.debug(f"LLMService: Sending prompt for extract_calendar_update_details: {prompt[:400]}...") # Log more of prompt
+        response = await gemini_model.generate_content_async(prompt)
+
+        if response.prompt_feedback and response.prompt_feedback.block_reason:
+            logger.warning(f"LLMService: Call blocked for extract_calendar_update_details: {response.prompt_feedback.block_reason}")
+            return None
+        if not hasattr(response, 'text'):
+            logger.warning("LLMService: Response for extract_calendar_update_details missing 'text'.")
+            return None
+            
+        response_data = _parse_llm_json_output(response.text)
+
+        if response_data and isinstance(response_data, dict):
+            # Basic validation: ensure start/end times, if present, have dateTime and timeZone
+            for time_field in ['start', 'end']:
+                if time_field in response_data:
+                    field_value = response_data[time_field]
+                    if isinstance(field_value, dict):
+                        if 'dateTime' in field_value:
+                            if 'timeZone' not in field_value:
+                                logger.warning(f"LLMService: Missing 'timeZone' for '{time_field}.dateTime'. Adding user's timezone '{user_timezone_str}'. Data: {field_value}")
+                                response_data[time_field]['timeZone'] = user_timezone_str
+                            # Validate ISO format for dateTime
+                            try:
+                                dateutil_parser.isoparse(field_value['dateTime'])
+                            except ValueError:
+                                logger.warning(f"LLMService: Invalid ISO dateTime format for '{time_field}': {field_value['dateTime']}. Data: {response_data}")
+                                return None 
+                        elif 'date' in field_value: # All-day event
+                             # Validate ISO format for date
+                            try:
+                                dateutil_parser.isoparse(field_value['date'])
+                            except ValueError:
+                                logger.warning(f"LLMService: Invalid ISO date format for '{time_field}': {field_value['date']}. Data: {response_data}")
+                                return None
+                        else: # Neither dateTime nor date found, but it's a dict.
+                            logger.warning(f"LLMService: '{time_field}' is a dict but lacks 'dateTime' or 'date'. Data: {field_value}")
+                            return None
+                    # If field_value is not a dict (e.g. user tries to set start="tomorrow") - this should be caught by LLM but good to check
+                    else:
+                        logger.warning(f"LLMService: '{time_field}' value is not a dictionary as expected. Value: {field_value}. Data: {response_data}")
+                        return None
+
+            if not response_data: 
+                logger.warning(f"LLMService: Extracted update data is empty. Original LLM response was likely empty or invalid. Raw parsed: {response_data}")
+                return None
+                
+            logger.info(f"LLMService: Successfully extracted structured update data: {response_data}")
+            return response_data
+        else:
+            logger.warning(f"LLMService: Failed to extract valid structured update data or not a dict. Response: {response_data}")
+            return None
+    except GoogleAPIError as api_err:
+        logger.error(f"LLMService (Extract Update Details): Google API Error - {api_err}", exc_info=False)
+        return None
+    except Exception as e:
+        logger.error(f"LLMService: Error during LLM call for extract_calendar_update_details: {e}", exc_info=True)
+        return None
