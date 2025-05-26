@@ -40,6 +40,7 @@ GOOGLE_CALENDAR_SCOPES = [
 # Stores temporary states related to user interactions within the bot
 pending_events = {}     # {user_id: google_event_data} for creation confirmation
 pending_deletions = {}  # {user_id: {'event_id': '...', 'summary': '...'}} for deletion confirmation
+pending_updates = {}  # {user_id: {'event_id': '...', 'update_data': {...}, ...}} for update confirmation
 
 # --- Basic Validation ---
 if not TELEGRAM_BOT_TOKEN:
@@ -66,5 +67,18 @@ FS_COLLECTION_PREFS = 'user_preferences' # <--- New collection name
 MAX_HISTORY_TURNS = 8 # Number of turns to keep in memory for conversation context
 MAX_HISTORY_MESSAGES = 8 # Number of turns to keep in memory for conversation context
 print(f"Config loaded. Using Firestore collections: {FS_COLLECTION_TOKENS}, {FS_COLLECTION_STATES}, {FS_COLLECTION_PREFS}")
+
+# --- Callback Data Constants ---
+# For event creation (example, assuming they might be added similarly)
+# CONFIRM_EVENT_CREATE_CALLBACK = "confirm_event_create"
+# CANCEL_EVENT_CREATE_CALLBACK = "cancel_event_create"
+
+# For event deletion (example, assuming they might be added similarly)
+# CONFIRM_EVENT_DELETE_CALLBACK = "confirm_event_delete"
+# CANCEL_EVENT_DELETE_CALLBACK = "cancel_event_delete"
+
+# Callback data for event updates
+CONFIRM_EVENT_UPDATE_CALLBACK = "confirm_event_update"
+CANCEL_EVENT_UPDATE_CALLBACK = "cancel_event_update"
 
 print("Config loaded successfully.")

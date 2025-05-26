@@ -6,6 +6,9 @@ from dateutil import parser as dateutil_parser
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram.constants import ParseMode
+
+from llm.tools.update_calendar import UpdateCalendarEventTool # Added for event update tool
+
 # Timezone libraries
 import pytz
 from pytz.exceptions import UnknownTimeZoneError
@@ -500,6 +503,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         keyboard = [[InlineKeyboardButton("✅ Yes, Delete", callback_data="confirm_event_delete"),
                      InlineKeyboardButton("❌ No, Cancel", callback_data="cancel_event_delete")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
+    elif user_id in config.pending_updates: # NEW BLOCK
+            logger.info(f"Pending event update found for user {user_id}. Formatting confirmation from pending data.")
+            pending_update_info = config.pending_updates[user_id]
+            
+            # The agent_response is the confirmation message from UpdateCalendarEventTool.
+            # The tool also stores 'confirmation_message_from_tool' in pending_updates.
+            # Prefer the one from pending_updates as it might be more specifically formatted (e.g. HTML).
+            tool_confirm_msg = pending_update_info.get('confirmation_message_from_tool')
+            if tool_confirm_msg:
+                final_message_to_send = tool_confirm_msg
+            else:
+                # If tool somehow didn't save it, agent_response is the fallback.
+                logger.warning(f"Tool did not provide 'confirmation_message_from_tool' for user {user_id}, using agent's direct response for update confirmation.")
+                # final_message_to_send is already agent_response in this case.
+
+            # Use direct string values "confirm_event_update" and "cancel_event_update" for now.
+            # These will later be replaced by config constants.
+            keyboard = [[
+                InlineKeyboardButton("✅ Confirm Update", callback_data=config.CONFIRM_EVENT_UPDATE_CALLBACK),
+                InlineKeyboardButton("❌ Cancel Update", callback_data=config.CANCEL_EVENT_UPDATE_CALLBACK)
+            ]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
     # Send the agent's final text response, potentially with buttons
     # Send the final message (either agent's direct output or handler-formatted confirmation)
     await update.message.reply_text(
@@ -554,6 +579,24 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif callback_data == "cancel_event_delete":
         if user_id in config.pending_deletions: del config.pending_deletions[user_id]
         await query.edit_message_text("Event deletion cancelled.")
+
+    # --- Event Update ---
+    elif callback_data == config.CONFIRM_EVENT_UPDATE_CALLBACK: # MODIFIED
+        if user_id not in config.pending_updates: await query.edit_message_text("Update details expired or already processed."); return
+        pending_info = config.pending_updates.pop(user_id)
+        event_id = pending_info.get('event_id')
+        update_data = pending_info.get('update_data')
+        original_summary = pending_info.get('original_summary_for_confirm', 'the event')
+        if not event_id or not update_data: logger.error(f"Missing event_id or update_data for user {user_id} in confirm_event_update."); await query.edit_message_text("Error: Critical update information missing."); return
+        await query.edit_message_text(f"Updating '{original_summary}'...")
+        success, msg, link = await gs.update_calendar_event(user_id, event_id, update_data)
+        final_msg = msg + (f"\nView: <a href='{html.escape(link)}'>{html.escape(link)}</a>" if link else "") # Ensure link is HTML escaped
+        await query.edit_message_text(final_msg, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+        if not success and "Authentication failed" in msg and not gs.is_user_connected(user_id): logger.info(f"Token cleared for {user_id} during failed update.")
+
+    elif callback_data == config.CANCEL_EVENT_UPDATE_CALLBACK: # MODIFIED
+        if user_id in config.pending_updates: del config.pending_updates[user_id]
+        await query.edit_message_text("Event update cancelled.")
 
     else:
         logger.warning(f"Callback: Unhandled callback data: {callback_data}")

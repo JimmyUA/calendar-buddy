@@ -9,6 +9,7 @@ This project is a Telegram bot that uses a Large Language Model (LLM) agent to h
 - **Event Management:**
     - Create new calendar events.
     - Delete existing calendar events.
+    - Update existing events (e.g., reschedule, change title/description, update location).
     - View your agenda for specific days, weeks, or periods.
 - **Timezone Support:** Allows users to set their local timezone for accurate event scheduling and display.
 - **Conversation History:** Remembers the context of your conversation for a more natural interaction flow.
@@ -160,7 +161,9 @@ Once the bot is running and you've started a chat with it on Telegram:
         - "Create an event: Dentist appointment next Tuesday at 10 AM."
         - "Delete the budget review meeting on Friday."
         - "Cancel my 1-on-1 with Sarah."
-    - The bot will use its LLM agent to understand your request and may ask for confirmation before creating or deleting events.
+        - "Reschedule my 10am meeting to 11am tomorrow."
+        - "Change the title of my 'Project Review' event to 'Final Project Review'."
+    - The bot will use its LLM agent to understand your request and may ask for confirmation before creating, updating, or deleting events.
 
 5.  **Available Slash Commands:**
     - `/start`: Displays the welcome message.

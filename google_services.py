@@ -373,6 +373,67 @@ async def create_calendar_event(user_id: int, event_data: dict) -> tuple[bool, s
         logger.error(f"Unexpected error creating event for {user_id}: {e}", exc_info=True)
         return False, "An unexpected error occurred.", None
 
+async def update_calendar_event(user_id: int, event_id: str, update_data: dict) -> tuple[bool, str, str | None]:
+    """Updates an existing event. Returns (success, message, event_link)."""
+    service = _build_calendar_service_client(user_id)
+    if not service:
+        return False, "Authentication failed or required. Please try /connect_calendar.", None
+
+    if not update_data:
+        logger.warning(f"GS: update_calendar_event called for user {user_id}, event {event_id} with empty update_data.")
+        return False, "No changes were specified for the event update.", None
+
+    logger.info(f"GS: Attempting to update event ID {event_id} for user {user_id} with data: {update_data}")
+    try:
+        # Ensure that if start or end times are provided, they include a timeZone if they are dateTime values
+        # The Google API requires timeZone for dateTime, but not for date-only events.
+        # This logic assumes update_data might contain start/end fields that need timezone if not already present.
+        # However, the LLM preparing update_data should ideally handle this.
+        # For robustness, a check could be added here if issues arise.
+        # Example:
+        # if 'start' in update_data and 'dateTime' in update_data['start'] and 'timeZone' not in update_data['start']:
+        #     user_tz_str = get_user_timezone_str(user_id) or 'UTC' # Fallback to UTC
+        #     update_data['start']['timeZone'] = user_tz_str
+        # if 'end' in update_data and 'dateTime' in update_data['end'] and 'timeZone' not in update_data['end']:
+        #     user_tz_str = get_user_timezone_str(user_id) or 'UTC'
+        #     update_data['end']['timeZone'] = user_tz_str
+
+        updated_event = service.events().patch(
+            calendarId='primary',
+            eventId=event_id,
+            body=update_data,
+            sendNotifications=True # Optional: To notify attendees of the change
+        ).execute()
+
+        link = updated_event.get('htmlLink')
+        summary = updated_event.get('summary', 'Event') # Get summary from the updated event
+        logger.info(f"GS: Event ID {event_id} updated successfully for user {user_id}. Link: {link}")
+        return True, f"Event '{summary}' updated successfully.", link
+    except HttpError as error:
+        logger.error(f"GS: API error updating event {event_id} for user {user_id}: {error}")
+        error_details = f"API Error ({error.resp.status}): {error.resp.reason}"
+        try:
+            error_content = json.loads(error.content.decode())
+            error_details = error_content.get('error', {}).get('message', error_details)
+        except: # Keep original error_details if parsing fails
+            pass
+
+        if error.resp.status == 401:
+            logger.warning(f"GS: Auth error (401) updating event {event_id} for user {user_id}. Clearing token.")
+            delete_user_token(user_id) # Clear token on auth error
+            return False, "Authentication failed. Please /connect_calendar again and retry.", None
+        elif error.resp.status == 404 or error.resp.status == 410: # Not Found or Gone
+            logger.warning(f"GS: Event {event_id} not found for update by user {user_id}.")
+            return False, "Couldn't update event (not found or already deleted).", None
+        elif error.resp.status == 400: # Bad Request (e.g. invalid parameters in update_data)
+             logger.warning(f"GS: Bad request (400) updating event {event_id} for user {user_id}. Details: {error_details}")
+             return False, f"Failed to update event. The changes might be invalid. Details: {error_details}", None
+        else:
+            return False, f"Failed to update event. {error_details}", None
+    except Exception as e:
+        logger.error(f"GS: Unexpected error updating event {event_id} for user {user_id}: {e}", exc_info=True)
+        return False, "An unexpected error occurred while updating the event.", None
+
 async def delete_calendar_event(user_id: int, event_id: str) -> tuple[bool, str]:
     """Deletes a specific event. Returns (success, message)."""
     service = _build_calendar_service_client(user_id)
