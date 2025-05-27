@@ -394,10 +394,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not update.message or not update.message.text:
         logger.warning("handle_message received update without message text.")
         return
+
     user_id = update.effective_user.id
     text = update.message.text
     logger.info(f"Agent Handler: Received message from user {user_id}: '{text[:50]}...'")
 
+    # --- Moved up for refinement logic access ---
     # 1. Check connection status
     if not gs.is_user_connected(user_id):
         await update.message.reply_text("Please connect your Google Calendar first using /connect_calendar.")
@@ -406,51 +408,110 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # 2. Get user timezone (prompt if needed)
     user_timezone_str = gs.get_user_timezone_str(user_id)
     if not user_timezone_str:
-        # Instead of blocking, maybe default and inform? Or stick to blocking.
-        # Let's default to UTC for agent calls if not set, but inform user.
         user_timezone_str = 'UTC'
         await update.message.reply_text(
             "Note: Your timezone isn't set. Using UTC. Use /set_timezone for accurate local times.")
-        # Alternative: Block until set
-        # await update.message.reply_text("Please set timezone first (/set_timezone).")
-        # return
 
     # 3. Retrieve/Initialize conversation history from context.user_data
     if 'lc_history' not in context.user_data:
         context.user_data['lc_history'] = []
-    chat_history: list[dict] = context.user_data['lc_history']  # Stores {'role': '...', 'content': '...'}
+    chat_history: list[dict] = context.user_data['lc_history']
+    # --- End of moved up section ---
 
-    # Add current user message to simple history list
-    chat_history.append({'role': 'user', 'content': text})
+    refinement_type = context.user_data.pop('refining_event_type', None)
+    original_message_id = context.user_data.pop('original_refine_message_id', None) # پوپ
 
-    # 4. Initialize Agent Executor (with user context and history)
-    try:
-        # Pass the simple history list; the initialize function converts it for LangChain memory
-        agent_executor = initialize_agent(user_id, user_timezone_str, chat_history)
-    except Exception as e:
-        logger.error(f"Failed to initialize agent for user {user_id}: {e}", exc_info=True)
-        await update.message.reply_text("Sorry, there was an error setting up the AI agent.")
-        chat_history.pop()  # Remove user message if agent failed to init
-        return
+    agent_response = None # Initialize agent_response
 
-    # 5. Invoke Agent Executor
-    await update.message.chat.send_action(action="typing")  # Indicate thinking
-    try:
-        # Use ainvoke for async execution
-        # Input structure depends on the prompt template (e.g., 'input' key)
-        response = await agent_executor.ainvoke({
-            "input": text
-            # chat_history is handled by the memory object passed to AgentExecutor
-        })
-        agent_response = response.get('output', "Sorry, I didn't get a response.")
+    if refinement_type:
+        logger.info(f"Processing refinement for type '{refinement_type}' from user {user_id}.")
+        # Add user's refinement message to history
+        chat_history.append({'role': 'user', 'content': text})
 
-    except Exception as e:
-        logger.error(f"Agent execution error for user {user_id}: {e}", exc_info=True)
-        agent_response = "Sorry, an error occurred while processing your request with the agent."
-        chat_history.pop()  # Remove user message if agent failed
+        input_for_agent = ""
+        if refinement_type == 'create':
+            if user_id not in config.pending_events:
+                await update.message.reply_text("It seems the event you were refining has expired or was cancelled. Please start over.")
+                # Clean up chat history if the last message was the user's expired refinement
+                if chat_history and chat_history[-1]['role'] == 'user' and chat_history[-1]['content'] == text:
+                    chat_history.pop()
+                return
+            pending_event_data = config.pending_events[user_id]
+            current_summary = pending_event_data.get('summary', 'No summary')
+            current_start = pending_event_data.get('start', {}).get('dateTime', 'No start time')
+            input_for_agent = (
+                f"The user wants to refine a pending event creation. "
+                f"The current event details are: Summary='{current_summary}', Start='{current_start}'. "
+                f"The user's refinement instruction is: '{text}'. "
+                f"Please process this refinement. You should aim to call the 'create_calendar_event' tool "
+                f"with the full, updated event details based on the user's instruction. "
+                f"The output should be the confirmation message from that tool."
+            )
+            logger.debug(f"Refinement (create) input for agent: {input_for_agent}")
 
-        # --- Send Response & Check for Pending Actions ---
-    final_message_to_send = agent_response  # Start with agent's direct output
+        elif refinement_type == 'delete':
+            if user_id not in config.pending_deletions:
+                await update.message.reply_text("It seems the event deletion you were refining has expired or was cancelled. Please start over.")
+                if chat_history and chat_history[-1]['role'] == 'user' and chat_history[-1]['content'] == text:
+                    chat_history.pop()
+                return
+            pending_deletion_data = config.pending_deletions[user_id]
+            current_summary = pending_deletion_data.get('summary', 'No summary')
+            input_for_agent = (
+                f"The user wants to refine a pending event deletion. "
+                f"The event currently targeted for deletion is: '{current_summary}'. "
+                f"The user's refinement instruction is: '{text}'. "
+                f"Please process this. If the user specifies a different event to delete, use 'search_calendar_events' to find it, "
+                f"then 'delete_calendar_event' to prepare its deletion. If they confirm or provide more specific details for the current event, "
+                f"ensure 'delete_calendar_event' is appropriately called for that event. If they want to cancel or do something else, respond accordingly."
+            )
+            logger.debug(f"Refinement (delete) input for agent: {input_for_agent}")
+
+        if input_for_agent:
+            try:
+                agent_executor = initialize_agent(user_id, user_timezone_str, chat_history)
+                await update.message.chat.send_action(action="typing")
+                response = await agent_executor.ainvoke({"input": input_for_agent})
+                agent_response = response.get('output', f"Sorry, I didn't get a response for your {refinement_type} refinement.")
+            except Exception as e:
+                logger.error(f"Agent execution error during {refinement_type} refinement for user {user_id}: {e}", exc_info=True)
+                agent_response = f"Sorry, an error occurred while processing your {refinement_type} refinement."
+                # User's message is already in history. Agent's error response will be added by common logic.
+        # The rest of the function will handle sending agent_response and updating buttons
+        # No explicit return here, let it flow to the common response handling logic
+
+    else: # No refinement_type, proceed with normal message handling
+        # Add current user message to simple history list (only if not already added for refinement)
+        chat_history.append({'role': 'user', 'content': text})
+
+        # 4. Initialize Agent Executor (with user context and history)
+        try:
+            # Pass the simple history list; the initialize function converts it for LangChain memory
+            agent_executor = initialize_agent(user_id, user_timezone_str, chat_history)
+        except Exception as e:
+            logger.error(f"Failed to initialize agent for user {user_id}: {e}", exc_info=True)
+            await update.message.reply_text("Sorry, there was an error setting up the AI agent.")
+            chat_history.pop()  # Remove user message if agent failed to init
+            return
+
+        # 5. Invoke Agent Executor
+        await update.message.chat.send_action(action="typing")  # Indicate thinking
+        try:
+            # Use ainvoke for async execution
+            # Input structure depends on the prompt template (e.g., 'input' key)
+            response = await agent_executor.ainvoke({
+                "input": text
+                # chat_history is handled by the memory object passed to AgentExecutor
+            })
+            agent_response = response.get('output', "Sorry, I didn't get a response.")
+
+        except Exception as e:
+            logger.error(f"Agent execution error for user {user_id}: {e}", exc_info=True)
+            agent_response = "Sorry, an error occurred while processing your request with the agent."
+            chat_history.pop()  # Remove user message if agent failed
+
+    # --- Send Response & Check for Pending Actions (Common for both refinement and normal paths) ---
+    final_message_to_send = agent_response  # Start with agent's direct output (or refinement output)
     reply_markup = None
     # Check if a pending action was stored by a tool during the agent run
     if user_id in config.pending_events:
@@ -461,8 +522,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
             final_message_to_send = await create_final_message(pending_event_data)
 
-            keyboard = [[InlineKeyboardButton("✅ Confirm Create", callback_data="confirm_event_create"),
-                         InlineKeyboardButton("❌ Cancel Create", callback_data="cancel_event_create")]]
+            keyboard = [
+                [
+                    InlineKeyboardButton("✅ Confirm Create", callback_data="confirm_event_create"),
+                    InlineKeyboardButton("✏️ Refine Create", callback_data="refine_event_create")
+                ],
+                [InlineKeyboardButton("❌ Cancel Create", callback_data="cancel_event_create")]
+            ]
             reply_markup = InlineKeyboardMarkup(keyboard)
         except Exception as e:
             logger.error(f"Error formatting create confirmation in handler: {e}", exc_info=True)
@@ -497,8 +563,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             # Or, simply state:
             # final_message_to_send = f"Are you sure you want to delete the previously selected event (ID: {event_id_to_delete})?"
 
-        keyboard = [[InlineKeyboardButton("✅ Yes, Delete", callback_data="confirm_event_delete"),
-                     InlineKeyboardButton("❌ No, Cancel", callback_data="cancel_event_delete")]]
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ Yes, Delete", callback_data="confirm_event_delete"),
+                InlineKeyboardButton("✏️ Refine Delete", callback_data="refine_event_delete")
+            ],
+            [InlineKeyboardButton("❌ No, Cancel", callback_data="cancel_event_delete")]
+        ]
         reply_markup = InlineKeyboardMarkup(keyboard)
     # Send the agent's final text response, potentially with buttons
     # Send the final message (either agent's direct output or handler-formatted confirmation)
@@ -554,6 +625,33 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif callback_data == "cancel_event_delete":
         if user_id in config.pending_deletions: del config.pending_deletions[user_id]
         await query.edit_message_text("Event deletion cancelled.")
+
+    # --- Refine actions ---
+    elif callback_data == "refine_event_create":
+        # User wants to refine the event before confirming creation.
+        # Keep pending_events[user_id] as it contains the current event data.
+        if user_id not in config.pending_events:
+            await query.edit_message_text("Sorry, the event details seem to have expired. Please try creating the event again.")
+            return
+        context.user_data['refining_event_type'] = 'create'
+        context.user_data['original_refine_message_id'] = query.message.message_id
+        await query.edit_message_text(
+            "Okay, what would you like to change about this event? Or, you can describe a new event if you prefer."
+        )
+        logger.info(f"User {user_id} initiated refining event creation. Original message ID: {query.message.message_id}")
+
+    elif callback_data == "refine_event_delete":
+        # User wants to refine the event before confirming deletion.
+        # Keep pending_deletions[user_id] as it contains the current event data.
+        if user_id not in config.pending_deletions:
+            await query.edit_message_text("Sorry, the event deletion details seem to have expired. Please try deleting the event again.")
+            return
+        context.user_data['refining_event_type'] = 'delete'
+        context.user_data['original_refine_message_id'] = query.message.message_id
+        await query.edit_message_text(
+            "Okay, what would you like to clarify for deleting this event? For example, you can specify a different event, provide more details about the event you want to delete, or tell me if you want to do something else instead."
+        )
+        logger.info(f"User {user_id} initiated refining event deletion. Original message ID: {query.message.message_id}")
 
     else:
         logger.warning(f"Callback: Unhandled callback data: {callback_data}")
