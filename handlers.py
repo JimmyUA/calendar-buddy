@@ -12,6 +12,7 @@ from pytz.exceptions import UnknownTimeZoneError
 
 import config
 import google_services as gs  # For Calendar and Auth services
+from google_services import add_pending_event, get_pending_event, delete_pending_event, add_pending_deletion, get_pending_deletion, delete_pending_deletion
 from handler.message_formatter import create_final_message
 from llm import llm_service
 from llm.agent import initialize_agent
@@ -199,12 +200,15 @@ async def _handle_calendar_create(update: Update, context: ContextTypes.DEFAULT_
                        f"<b>End:</b> {end_confirm}\n<b>Desc:</b> {event_details.get('description', 'N/A')}\n" \
                        f"<b>Loc:</b> {event_details.get('location', 'N/A')}"
 
-        config.pending_events[user_id] = google_event_data
-        keyboard = [[InlineKeyboardButton("✅ Confirm", callback_data="confirm_event_create"),
-                     InlineKeyboardButton("❌ Cancel", callback_data="cancel_event_create")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        logger.log(logging.DEBUG, f"Pending event data for user {user_id}: {google_event_data} and confirmation text: {confirm_text}")
-        await update.message.reply_html(confirm_text, reply_markup=reply_markup)
+        if add_pending_event(user_id, google_event_data):
+            keyboard = [[InlineKeyboardButton("✅ Confirm", callback_data="confirm_event_create"),
+                         InlineKeyboardButton("❌ Cancel", callback_data="cancel_event_create")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            logger.debug(f"Pending event data stored for user {user_id}: {google_event_data}. Confirmation text: {confirm_text}")
+            await update.message.reply_html(confirm_text, reply_markup=reply_markup)
+        else:
+            logger.error(f"Failed to store pending event for user {user_id} in Firestore.")
+            await update.message.reply_text("Sorry, there was an issue preparing your event. Please try again.")
 
     except Exception as e:
         logger.error(f"Error preparing create confirmation for user {user_id}: {e}", exc_info=True)
@@ -276,11 +280,15 @@ async def _handle_calendar_delete(update: Update, context: ContextTypes.DEFAULT_
             "Sorry, internal error retrieving event ID."); return
 
         confirm_text = f"Delete this event?\n\n<b>{event_summary}</b>\n({time_confirm})"
-        config.pending_deletions[user_id] = {'event_id': event_id, 'summary': event_summary}
-        keyboard = [[InlineKeyboardButton("✅ Yes, Delete", callback_data="confirm_event_delete"),
-                     InlineKeyboardButton("❌ No, Cancel", callback_data="cancel_event_delete")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_html(confirm_text, reply_markup=reply_markup)
+        pending_deletion_data = {'event_id': event_id, 'summary': event_summary}
+        if add_pending_deletion(user_id, pending_deletion_data):
+            keyboard = [[InlineKeyboardButton("✅ Yes, Delete", callback_data="confirm_event_delete"),
+                         InlineKeyboardButton("❌ No, Cancel", callback_data="cancel_event_delete")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_html(confirm_text, reply_markup=reply_markup)
+        else:
+            logger.error(f"Failed to store pending deletion for user {user_id} in Firestore.")
+            await update.message.reply_text("Sorry, there was an issue preparing for event deletion. Please try again.")
 
     elif match_type == 'MULTIPLE':
         await update.message.reply_text(
@@ -376,9 +384,10 @@ async def disconnect_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE
     """Removes user's stored credentials."""
     user_id = update.effective_user.id
     deleted = gs.delete_user_token(user_id)
-    # Clear any pending states associated with the user
-    if user_id in config.pending_events: del config.pending_events[user_id]
-    if user_id in config.pending_deletions: del config.pending_deletions[user_id]
+    # Clear any pending states associated with the user from Firestore
+    delete_pending_event(user_id)
+    delete_pending_deletion(user_id)
+    logger.info(f"Cleared pending event and deletion data for user {user_id} during disconnect.")
     await update.message.reply_text("Calendar connection removed." if deleted else "Calendar wasn't connected.")
 
 
@@ -456,55 +465,53 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # --- Send Response & Check for Pending Actions ---
     final_message_to_send = agent_response  # Start with agent's direct output
     reply_markup = None
-    # Check if a pending action was stored by a tool during the agent run
-    if user_id in config.pending_events:
-        logger.info(f"Pending event create found for user {user_id}. Formatting confirmation from pending data.")
-        pending_event_data = config.pending_events[user_id]
+
+    # Check for pending event creation
+    pending_event_data = get_pending_event(user_id)
+    if pending_event_data:
+        logger.info(f"Pending event create found for user {user_id} from Firestore. Formatting confirmation.")
         try:
-            user_tz = pytz.timezone(user_timezone_str if user_timezone_str else 'UTC') # Get user TZ
-
+            user_tz = pytz.timezone(user_timezone_str if user_timezone_str else 'UTC')
             final_message_to_send = await create_final_message(pending_event_data)
-
             keyboard = [[InlineKeyboardButton("✅ Confirm Create", callback_data="confirm_event_create"),
                          InlineKeyboardButton("❌ Cancel Create", callback_data="cancel_event_create")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
         except Exception as e:
-            logger.error(f"Error formatting create confirmation in handler: {e}", exc_info=True)
-            final_message_to_send = "Error preparing event confirmation. Please try again. {e}"
-    elif user_id in config.pending_deletions:
-        logger.info(f"Pending event delete found for user {user_id}. Formatting confirmation from pending data.")
-        pending_deletion_data = config.pending_deletions[user_id]
-        event_id_to_delete = pending_deletion_data.get('event_id')
-        # Fetch full event details again to ensure the summary and time are current and correctly formatted
-        # This adds an API call but ensures accuracy for the confirmation.
-        # Alternatively, trust the summary stored during the tool run, but it might be less detailed.
-        event_details_for_confirm = await gs.get_calendar_event_by_id(user_id, event_id_to_delete)
+            logger.error(f"Error formatting create confirmation in handler from Firestore data: {e}", exc_info=True)
+            final_message_to_send = f"Error preparing event confirmation: {e}. Please try again."
+            delete_pending_event(user_id) # Clear broken pending data
+    else:
+        # Only check for pending deletion if no pending creation
+        pending_deletion_data = get_pending_deletion(user_id)
+        if pending_deletion_data:
+            logger.info(f"Pending event delete found for user {user_id} from Firestore. Formatting confirmation.")
+            event_id_to_delete = pending_deletion_data.get('event_id')
+            # Fetch full event details again to ensure the summary and time are current and correctly formatted
+            event_details_for_confirm = await gs.get_calendar_event_by_id(user_id, event_id_to_delete)
 
-        if event_details_for_confirm:
-            try:
-                user_tz = pytz.timezone(user_timezone_str if user_timezone_str else 'UTC')
-                summary = event_details_for_confirm.get('summary', 'this event')
-                time_confirm = _format_event_time(event_details_for_confirm, user_tz) # Use your existing util
+            if event_details_for_confirm:
+                try:
+                    user_tz = pytz.timezone(user_timezone_str if user_timezone_str else 'UTC')
+                    summary = event_details_for_confirm.get('summary', 'this event')
+                    time_confirm = _format_event_time(event_details_for_confirm, user_tz)
+                    final_message_to_send = (
+                        f"Found event: '<b>{summary}</b>' ({time_confirm}).\n\n"
+                        f"Should I delete this event?"
+                    )
+                except Exception as e:
+                    logger.error(f"Error formatting delete confirmation in handler from Firestore data: {e}", exc_info=True)
+                    summary = pending_deletion_data.get('summary', 'the selected event') # Fallback
+                    final_message_to_send = f"Are you sure you want to delete '{summary}'?"
+            else:
+                # Event might have been deleted by something else
+                summary = pending_deletion_data.get('summary', f'event ID {event_id_to_delete}')
+                final_message_to_send = f"Could not re-fetch details for '{summary}' for deletion confirmation. It might no longer exist. Proceed with deleting?"
+                # delete_pending_deletion(user_id) # Optional: Clear if event not found for confirm
 
-                final_message_to_send = (
-                    f"Found event: '<b>{summary}</b>' ({time_confirm}).\n\n"
-                    f"Should I delete this event?"
-                )
-            except Exception as e:
-                logger.error(f"Error formatting delete confirmation in handler: {e}", exc_info=True)
-                # Fallback to summary stored by the tool if fresh fetch/format fails
-                summary = pending_deletion_data.get('summary', 'the selected event')
-                final_message_to_send = f"Are you sure you want to delete '{summary}'?"
-        else:
-            # Event might have been deleted by something else in the meantime
-            final_message_to_send = f"Could not re-fetch details for event ID '{event_id_to_delete}' for deletion confirmation. It might no longer exist. Proceed with deleting by ID?"
-            # Or, simply state:
-            # final_message_to_send = f"Are you sure you want to delete the previously selected event (ID: {event_id_to_delete})?"
+            keyboard = [[InlineKeyboardButton("✅ Yes, Delete", callback_data="confirm_event_delete"),
+                         InlineKeyboardButton("❌ No, Cancel", callback_data="cancel_event_delete")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
 
-        keyboard = [[InlineKeyboardButton("✅ Yes, Delete", callback_data="confirm_event_delete"),
-                     InlineKeyboardButton("❌ No, Cancel", callback_data="cancel_event_delete")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-    # Send the agent's final text response, potentially with buttons
     # Send the final message (either agent's direct output or handler-formatted confirmation)
     await update.message.reply_text(
         final_message_to_send, # Use the potentially overridden message
@@ -529,34 +536,44 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     # --- Event Creation ---
     if callback_data == "confirm_event_create":
-        if user_id not in config.pending_events: await query.edit_message_text("Event details expired."); return
-        event_details = config.pending_events.pop(user_id)
-        await query.edit_message_text(f"Adding '{event_details.get('summary')}'...")
+        event_details = get_pending_event(user_id)
+        if not event_details:
+            await query.edit_message_text("Event details expired or not found.")
+            return
+        await query.edit_message_text(f"Adding '{event_details.get('summary', 'event')}' to your calendar...")
         success, msg, link = await gs.create_calendar_event(user_id, event_details)
-        final_msg = msg + (f"\nView: {link}" if link else "");
-        await query.edit_message_text(final_msg, parse_mode=ParseMode.HTML)
-        if not success and "Authentication failed" in msg and not gs.is_user_connected(user_id): logger.info(
-            f"Token cleared for {user_id} during failed create.")
+        final_msg = msg + (f"\nView: <a href='{link}'>Event Link</a>" if link else "")
+        await query.edit_message_text(final_msg, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+        delete_pending_event(user_id) # Clear after attempt
+        if not success and "Authentication failed" in msg and not gs.is_user_connected(user_id):
+            logger.info(f"Token potentially cleared for {user_id} during failed create confirmation.")
 
     elif callback_data == "cancel_event_create":
-        if user_id in config.pending_events: del config.pending_events[user_id]
+        delete_pending_event(user_id)
         await query.edit_message_text("Event creation cancelled.")
 
     # --- Event Deletion ---
     elif callback_data == "confirm_event_delete":
-        if user_id not in config.pending_deletions: await query.edit_message_text("Confirmation expired."); return
-        pending = config.pending_deletions.pop(user_id)
-        event_id, summary = pending.get('event_id'), pending.get('summary', 'event')
-        if not event_id: logger.error(f"Missing event_id for {user_id}"); await query.edit_message_text(
-            "Error: Missing event ID."); return
+        pending_deletion_data = get_pending_deletion(user_id)
+        if not pending_deletion_data:
+            await query.edit_message_text("Confirmation for deletion expired or not found.")
+            return
+        event_id = pending_deletion_data.get('event_id')
+        summary = pending_deletion_data.get('summary', 'the event')
+        if not event_id:
+            logger.error(f"Missing event_id in pending_deletion_data for user {user_id}")
+            await query.edit_message_text("Error: Missing event ID for deletion.")
+            delete_pending_deletion(user_id) # Clear broken data
+            return
         await query.edit_message_text(f"Deleting '{summary}'...")
         success, msg = await gs.delete_calendar_event(user_id, event_id)
         await query.edit_message_text(msg, parse_mode=ParseMode.HTML)
-        if not success and "Authentication failed" in msg and not gs.is_user_connected(user_id): logger.info(
-            f"Token cleared for {user_id} during failed delete.")
+        delete_pending_deletion(user_id) # Clear after attempt
+        if not success and "Authentication failed" in msg and not gs.is_user_connected(user_id):
+            logger.info(f"Token potentially cleared for {user_id} during failed delete confirmation.")
 
     elif callback_data == "cancel_event_delete":
-        if user_id in config.pending_deletions: del config.pending_deletions[user_id]
+        delete_pending_deletion(user_id)
         await query.edit_message_text("Event deletion cancelled.")
 
     else:
