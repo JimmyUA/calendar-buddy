@@ -18,6 +18,7 @@ from google.auth.transport.requests import Request
 
 # Firestore specific imports
 from google.cloud import firestore
+from google.cloud.firestore_v1.base_query import FieldFilter # May not be strictly needed for these functions
 from google.api_core.exceptions import NotFound
 from pytz.exceptions import UnknownTimeZoneError
 
@@ -29,8 +30,122 @@ logger = logging.getLogger(__name__)
 db = config.FIRESTORE_DB
 OAUTH_STATES_COLLECTION = db.collection('oauth_states') if db else None
 USER_TOKENS_COLLECTION = db.collection('user_tokens') if db else None
-# ---> NEW: Reference for preferences collection <---
 USER_PREFS_COLLECTION = db.collection(config.FS_COLLECTION_PREFS) if db else None
+PENDING_EVENTS_COLLECTION = db.collection(config.FS_COLLECTION_PENDING_EVENTS) if db else None
+PENDING_DELETIONS_COLLECTION = db.collection(config.FS_COLLECTION_PENDING_DELETIONS) if db else None
+
+
+# === Pending Event Management (Firestore) ===
+
+def add_pending_event(user_id: int, event_data: dict) -> bool:
+    """Stores event_data in Firestore for later confirmation."""
+    if not PENDING_EVENTS_COLLECTION:
+        logger.error("Firestore PENDING_EVENTS_COLLECTION unavailable for adding pending event.")
+        return False
+    user_doc_id = str(user_id)
+    doc_ref = PENDING_EVENTS_COLLECTION.document(user_doc_id)
+    try:
+        doc_ref.set({
+            'event_data': event_data,
+            'created_at': firestore.SERVER_TIMESTAMP
+        })
+        logger.info(f"Stored pending event for user {user_id} in '{config.FS_COLLECTION_PENDING_EVENTS}'")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to store pending event for user {user_id}: {e}", exc_info=True)
+        return False
+
+def get_pending_event(user_id: int) -> dict | None:
+    """Retrieves pending event data for a user from Firestore."""
+    if not PENDING_EVENTS_COLLECTION:
+        logger.error("Firestore PENDING_EVENTS_COLLECTION unavailable for getting pending event.")
+        return None
+    user_doc_id = str(user_id)
+    doc_ref = PENDING_EVENTS_COLLECTION.document(user_doc_id)
+    try:
+        snapshot = doc_ref.get()
+        if snapshot.exists:
+            data = snapshot.to_dict()
+            logger.debug(f"Retrieved pending event for user {user_id}.")
+            return data.get('event_data') # Return only the event_data part
+        else:
+            logger.debug(f"No pending event found for user {user_id}.")
+            return None
+    except Exception as e:
+        logger.error(f"Error fetching pending event for user {user_id}: {e}", exc_info=True)
+        return None
+
+def delete_pending_event(user_id: int) -> bool:
+    """Deletes a pending event document for a user from Firestore."""
+    if not PENDING_EVENTS_COLLECTION:
+        logger.error("Firestore PENDING_EVENTS_COLLECTION unavailable for deleting pending event.")
+        return False
+    user_doc_id = str(user_id)
+    doc_ref = PENDING_EVENTS_COLLECTION.document(user_doc_id)
+    try:
+        doc_ref.delete()
+        logger.info(f"Deleted pending event for user {user_id} (if it existed).")
+        return True # Success even if doc didn't exist, as per Firestore behavior
+    except Exception as e:
+        logger.error(f"Failed to delete pending event for user {user_id}: {e}", exc_info=True)
+        return False
+
+# === Pending Deletion Management (Firestore) ===
+
+def add_pending_deletion(user_id: int, deletion_data: dict) -> bool:
+    """Stores deletion_data (e.g., event_id, summary) in Firestore for later confirmation."""
+    if not PENDING_DELETIONS_COLLECTION:
+        logger.error("Firestore PENDING_DELETIONS_COLLECTION unavailable for adding pending deletion.")
+        return False
+    user_doc_id = str(user_id)
+    doc_ref = PENDING_DELETIONS_COLLECTION.document(user_doc_id)
+    try:
+        # Store the provided deletion_data directly, ensure it includes event_id and summary
+        doc_ref.set({
+            'deletion_data': deletion_data, # e.g., {'event_id': 'xyz', 'summary': 'Event to delete'}
+            'created_at': firestore.SERVER_TIMESTAMP
+        })
+        logger.info(f"Stored pending deletion for user {user_id} in '{config.FS_COLLECTION_PENDING_DELETIONS}'")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to store pending deletion for user {user_id}: {e}", exc_info=True)
+        return False
+
+def get_pending_deletion(user_id: int) -> dict | None:
+    """Retrieves pending deletion data for a user from Firestore."""
+    if not PENDING_DELETIONS_COLLECTION:
+        logger.error("Firestore PENDING_DELETIONS_COLLECTION unavailable for getting pending deletion.")
+        return None
+    user_doc_id = str(user_id)
+    doc_ref = PENDING_DELETIONS_COLLECTION.document(user_doc_id)
+    try:
+        snapshot = doc_ref.get()
+        if snapshot.exists:
+            data = snapshot.to_dict()
+            logger.debug(f"Retrieved pending deletion for user {user_id}.")
+            return data.get('deletion_data') # Return only the deletion_data part
+        else:
+            logger.debug(f"No pending deletion found for user {user_id}.")
+            return None
+    except Exception as e:
+        logger.error(f"Error fetching pending deletion for user {user_id}: {e}", exc_info=True)
+        return None
+
+def delete_pending_deletion(user_id: int) -> bool:
+    """Deletes a pending deletion document for a user from Firestore."""
+    if not PENDING_DELETIONS_COLLECTION:
+        logger.error("Firestore PENDING_DELETIONS_COLLECTION unavailable for deleting pending deletion.")
+        return False
+    user_doc_id = str(user_id)
+    doc_ref = PENDING_DELETIONS_COLLECTION.document(user_doc_id)
+    try:
+        doc_ref.delete()
+        logger.info(f"Deleted pending deletion for user {user_id} (if it existed).")
+        return True # Success even if doc didn't exist
+    except Exception as e:
+        logger.error(f"Failed to delete pending deletion for user {user_id}: {e}", exc_info=True)
+        return False
+
 # === Google Authentication & Firestore Persistence ===
 # --- NEW: Get Single Event by ID ---
 async def get_calendar_event_by_id(user_id: int, event_id: str) -> dict | None:

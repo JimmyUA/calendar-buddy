@@ -38,8 +38,7 @@ GOOGLE_CALENDAR_SCOPES = [
 
 # --- In-Memory State Management (for this prototype) ---
 # Stores temporary states related to user interactions within the bot
-pending_events = {}     # {user_id: google_event_data} for creation confirmation
-pending_deletions = {}  # {user_id: {'event_id': '...', 'summary': '...'}} for deletion confirmation
+# pending_events and pending_deletions have been moved to Firestore.
 
 # --- Basic Validation ---
 if not TELEGRAM_BOT_TOKEN:
@@ -62,9 +61,11 @@ if FIRESTORE_DB is None:
 FS_COLLECTION_TOKENS = 'user_tokens'
 FS_COLLECTION_STATES = 'oauth_states'
 FS_COLLECTION_PREFS = 'user_preferences' # <--- New collection name
+FS_COLLECTION_PENDING_EVENTS = 'pending_events'
+FS_COLLECTION_PENDING_DELETIONS = 'pending_deletions'
 
 MAX_HISTORY_TURNS = 8 # Number of turns to keep in memory for conversation context
 MAX_HISTORY_MESSAGES = 8 # Number of turns to keep in memory for conversation context
-print(f"Config loaded. Using Firestore collections: {FS_COLLECTION_TOKENS}, {FS_COLLECTION_STATES}, {FS_COLLECTION_PREFS}")
+print(f"Config loaded. Using Firestore collections: {FS_COLLECTION_TOKENS}, {FS_COLLECTION_STATES}, {FS_COLLECTION_PREFS}, {FS_COLLECTION_PENDING_EVENTS}, {FS_COLLECTION_PENDING_DELETIONS}")
 
 print("Config loaded successfully.")
