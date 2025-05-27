@@ -5,7 +5,7 @@ import pytz  # For timezone handling
 from dateutil import parser as dateutil_parser
 from pytz.exceptions import UnknownTimeZoneError
 
-import config
+from google_services import add_pending_event, delete_pending_deletion # delete_pending_deletion for clearing
 from llm import llm_service
 from llm.tools.calendar_base import CalendarBaseTool
 
@@ -63,9 +63,14 @@ class CreateCalendarEventTool(CalendarBaseTool):
             return "Error: Could not process the extracted event details for confirmation."
 
         # 3. Store pending action data (the structured data needed by Google API)
-        config.pending_events[self.user_id] = event_data
-        # Clear any pending delete for the same user
-        if self.user_id in config.pending_deletions: del config.pending_deletions[self.user_id]
-
-        # 4. Return the confirmation string to the agent
-        return confirmation_string
+        if add_pending_event(self.user_id, event_data):
+            # Clear any pending delete for the same user to avoid conflicting states
+            # This is a direct replacement for the previous logic, assuming it's still desired.
+            # If this cross-state clearing is handled elsewhere (e.g. handlers), this can be removed.
+            delete_pending_deletion(self.user_id) # Assuming this is the desired behavior
+            logger.info(f"Tool: Pending event for user {self.user_id} stored in Firestore.")
+            # 4. Return the confirmation string to the agent
+            return confirmation_string
+        else:
+            logger.error(f"Tool: Failed to store pending event in Firestore for user {self.user_id}.")
+            return "Error: Failed to save the event details for confirmation. Please try again later."

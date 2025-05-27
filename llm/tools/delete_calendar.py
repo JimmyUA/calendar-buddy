@@ -2,7 +2,7 @@ import logging
 
 import pytz  # For timezone handling
 
-import config
+from google_services import add_pending_deletion, delete_pending_event # For Firestore pending actions
 import google_services as gs
 from llm.tools.calendar_base import CalendarBaseTool
 from utils import _format_event_time
@@ -38,8 +38,14 @@ class DeleteCalendarEventTool(CalendarBaseTool):
         confirmation_string = f"Found event: '{event_summary}' ({time_confirm}).\n\nShould I delete this event?"
 
         # 3. Store pending action data
-        config.pending_deletions[self.user_id] = {'event_id': event_id, 'summary': event_summary}
-        if self.user_id in config.pending_events: del config.pending_events[self.user_id]  # Clear other pending action
+        # Clear any pending event creation first to avoid conflicting states
+        delete_pending_event(self.user_id)
 
-        # 4. Return confirmation string
-        return confirmation_string
+        pending_data = {'event_id': event_id, 'summary': event_summary}
+        if add_pending_deletion(self.user_id, pending_data):
+            logger.info(f"Tool: Pending deletion for user {self.user_id} (event: {event_id}) stored in Firestore.")
+            # 4. Return confirmation string
+            return confirmation_string
+        else:
+            logger.error(f"Tool: Failed to store pending deletion in Firestore for user {self.user_id}.")
+            return "Error: Failed to save the event deletion details for confirmation. Please try again."
