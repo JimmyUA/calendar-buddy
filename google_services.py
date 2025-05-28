@@ -505,7 +505,7 @@ async def create_calendar_access_request(
             'request_timestamp': firestore.SERVER_TIMESTAMP
         }
         # Set the data for the new document
-        write_result = await doc_ref.set(request_data) # Use await for async set if library supports/requires
+        write_result = doc_ref.set(request_data) # Use await for async set if library supports/requires
         logger.info(f"GS: Calendar access request created with ID {doc_ref.id}. Write time: {write_result.update_time}")
         return doc_ref.id
     except Exception as e:
@@ -528,7 +528,7 @@ async def get_calendar_access_request(request_id: str) -> dict | None:
         return None
     try:
         doc_ref = CALENDAR_ACCESS_REQUESTS_COLLECTION.document(request_id)
-        snapshot = await doc_ref.get() # Use await for async get
+        snapshot = doc_ref.get() # Use await for async get
         if snapshot.exists:
             logger.info(f"GS: Successfully fetched calendar access request {request_id}.")
             return snapshot.to_dict()
@@ -560,7 +560,7 @@ async def update_calendar_access_request_status(request_id: str, status: str) ->
             'status': status,
             'response_timestamp': firestore.SERVER_TIMESTAMP
         }
-        write_result = await doc_ref.update(update_data) # Use await for async update
+        write_result = doc_ref.update(update_data) # Use await for async update
         logger.info(f"GS: Successfully updated status of request {request_id} to '{status}'. Write time: {write_result.update_time}")
         return True
     except NotFound:

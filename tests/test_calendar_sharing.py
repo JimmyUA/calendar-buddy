@@ -626,7 +626,9 @@ class TestCalendarSharing(unittest.TestCase):
         """Test create_calendar_access_request successfully creates a document."""
         mock_doc_ref = MagicMock()
         mock_doc_ref.id = "new_request_id_firestore"
-        mock_doc_ref.set = AsyncMock() # Firestore `set` is async if using an async client, adjust if sync
+        # Firestore `set` is synchronous for the standard Python client.
+        # `set` returns a WriteResult, which can be mocked if its attributes are accessed.
+        mock_doc_ref.set = MagicMock(return_value=MagicMock(spec=firestore.WriteResult)) 
 
         mock_collection.document.return_value = mock_doc_ref # When a new doc is created without specific ID
 
@@ -673,9 +675,10 @@ class TestCalendarSharing(unittest.TestCase):
         mock_snapshot.to_dict.return_value = expected_data
         
         mock_doc_ref = MagicMock()
-        mock_doc_ref.get = AsyncMock(return_value=mock_snapshot) # get() is async
+        mock_doc_ref.get = MagicMock(return_value=mock_snapshot) # get() is synchronous
         mock_collection.document.return_value = mock_doc_ref
 
+        # The function under test is async, so we still await it.
         result_data = await get_calendar_access_request(request_id)
 
         self.assertEqual(result_data, expected_data)
@@ -690,7 +693,7 @@ class TestCalendarSharing(unittest.TestCase):
         mock_snapshot.exists = False
         
         mock_doc_ref = MagicMock()
-        mock_doc_ref.get = AsyncMock(return_value=mock_snapshot)
+        mock_doc_ref.get = MagicMock(return_value=mock_snapshot) # get() is synchronous
         mock_collection.document.return_value = mock_doc_ref
 
         result_data = await get_calendar_access_request(request_id)
@@ -703,7 +706,8 @@ class TestCalendarSharing(unittest.TestCase):
         new_status = "approved"
 
         mock_doc_ref = MagicMock()
-        mock_doc_ref.update = AsyncMock() # update() is async
+        # update() is synchronous, returns a WriteResult.
+        mock_doc_ref.update = MagicMock(return_value=MagicMock(spec=firestore.WriteResult)) 
         mock_collection.document.return_value = mock_doc_ref
         
         # Mock firestore.SERVER_TIMESTAMP as it's used in the function
@@ -726,7 +730,7 @@ class TestCalendarSharing(unittest.TestCase):
         """Test update_calendar_access_request_status when document is not found."""
         request_id = "update_req_not_found"
         mock_doc_ref = MagicMock()
-        mock_doc_ref.update = AsyncMock(side_effect=firestore.NotFound("Not found")) # Simulate NotFound
+        mock_doc_ref.update = MagicMock(side_effect=firestore.NotFound("Not found")) # Simulate NotFound
         mock_collection.document.return_value = mock_doc_ref
 
         result = await update_calendar_access_request_status(request_id, "approved")
@@ -737,7 +741,7 @@ class TestCalendarSharing(unittest.TestCase):
         """Test update_calendar_access_request_status when Firestore operation fails."""
         request_id = "update_req_fail"
         mock_doc_ref = MagicMock()
-        mock_doc_ref.update = AsyncMock(side_effect=Exception("Firestore error"))
+        mock_doc_ref.update = MagicMock(side_effect=Exception("Firestore error"))
         mock_collection.document.return_value = mock_doc_ref
         
         result = await update_calendar_access_request_status(request_id, "denied")
