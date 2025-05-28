@@ -20,6 +20,9 @@ from utils import _format_event_time
 
 logger = logging.getLogger(__name__)
 
+# Define constants for ask_calendar
+DEFAULT_REQUESTED_USER_ID_PLACEHOLDER = "00000000" # Placeholder for unresolved usernames
+
 # Define history constants
 MAX_HISTORY_TURNS = 10  # Remember last 10 back-and-forth turns
 MAX_HISTORY_MESSAGES = MAX_HISTORY_TURNS * 2
@@ -559,11 +562,145 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if user_id in config.pending_deletions: del config.pending_deletions[user_id]
         await query.edit_message_text("Event deletion cancelled.")
 
+    # --- Calendar Access Request Handling ---
+    elif callback_data.startswith("approve_access_") or callback_data.startswith("deny_access_"):
+        action, request_id = callback_data.split("_", 2)[0], callback_data.split("_", 2)[2] # approve_access_ID -> approve, ID
+        logger.info(f"Processing calendar access request ID: {request_id}, Action: {action} by user {user_id}")
+
+        request_details = await gs.get_calendar_access_request(request_id)
+
+        if not request_details:
+            await query.edit_message_text("This request is no longer valid or has expired.")
+            logger.warning(f"Calendar access request {request_id} not found for action {action}.")
+            return
+
+        requested_user_id_str = request_details.get('requested_user_id')
+        requester_id_str = request_details.get('requester_id')
+        target_username = request_details.get('target_username', 'their') # Fallback for messages
+        
+        # Nicely format dates for notifications from stored ISO strings
+        try:
+            start_dt_obj = dateutil_parser.isoparse(request_details.get('start_time_iso'))
+            end_dt_obj = dateutil_parser.isoparse(request_details.get('end_time_iso'))
+            nice_start_date = start_dt_obj.strftime("%B %d, %Y")
+            nice_end_date = end_dt_obj.strftime("%B %d, %Y")
+        except: # Fallback if parsing fails
+            nice_start_date = "the start date"
+            nice_end_date = "the end date"
+
+
+        if str(query.from_user.id) != requested_user_id_str:
+            await query.edit_message_text("This is not your request to approve/deny.")
+            logger.warning(f"User {user_id} tried to {action} request {request_id} which belongs to {requested_user_id_str}.")
+            return
+
+        if request_details.get('status') not in ["pending", None]: # None check for older records before status field
+            await query.edit_message_text("This request has already been processed.")
+            logger.info(f"Request {request_id} already processed with status: {request_details.get('status')}.")
+            return
+
+        if action == "approve":
+            status_updated = await gs.update_calendar_access_request_status(request_id, "approved")
+            if status_updated:
+                logger.info(f"Request {request_id} approved by {user_id}. Attempting to send events to requester {requester_id_str}.")
+                
+                # Fetch events for the approver (query.from_user.id)
+                # User's timezone for event fetching and formatting
+                user_tz = await _get_user_tz_or_prompt(update, context) # This uses query.from_user.id
+                if not user_tz: # Should not happen if user is interacting with buttons, but good check
+                    await query.edit_message_text("Error: Your timezone is not set. Please set it via /set_timezone and try again.")
+                    logger.error(f"Approver {user_id} for request {request_id} has no timezone set.")
+                    # Revert status or handle differently? For now, requester won't get events.
+                    # Consider notifying requester about this issue.
+                    return
+
+                # Parse ISO strings for start and end times from the request
+                start_time_iso = request_details.get('start_time_iso')
+                end_time_iso = request_details.get('end_time_iso')
+
+                # Ensure start_time_iso and end_time_iso are valid datetimes before passing to get_calendar_events
+                try:
+                    start_dt = dateutil_parser.isoparse(start_time_iso)
+                    end_dt = dateutil_parser.isoparse(end_time_iso)
+                except ValueError:
+                    logger.error(f"Invalid date format in request {request_id} when fetching events for approval.")
+                    await context.bot.send_message(
+                        chat_id=int(requester_id_str),
+                        text=f"Sorry, there was an error processing the dates for your request to view {target_username}'s calendar. Please try making a new request."
+                    )
+                    await query.edit_message_text("Access approved, but failed to parse date range for events. Requester notified.")
+                    return
+
+                events = await gs.get_calendar_events(
+                    user_id=query.from_user.id, # Events of the approver
+                    time_min_iso=start_dt.isoformat(),
+                    time_max_iso=end_dt.isoformat()
+                )
+
+                requester_message = f"Your request to view {target_username}'s calendar from {nice_start_date} to {nice_end_date} has been approved.\n\n"
+                if events is None:
+                    requester_message += "Could not fetch their calendar events at this time."
+                elif not events:
+                    requester_message += "No events found in their calendar for this period."
+                else:
+                    requester_message += f"🗓️ Events for {target_username} ({nice_start_date} - {nice_end_date}):\n"
+                    # We need the approver's (query.from_user.id) timezone for correct _format_event_time
+                    # The _get_user_tz_or_prompt above uses update, which in callback query is the approver's context
+                    approver_tz_str = gs.get_user_timezone_str(query.from_user.id)
+                    approver_tz = pytz.timezone(approver_tz_str) if approver_tz_str else pytz.utc # Default to UTC if not set
+
+                    for event in events:
+                        time_str = _format_event_time(event, approver_tz)
+                        requester_message += f"- *{html.escape(event.get('summary', 'No Title'))}* ({time_str})\n"
+                
+                try:
+                    await context.bot.send_message(
+                        chat_id=int(requester_id_str),
+                        text=requester_message,
+                        parse_mode=ParseMode.MARKDOWN
+                    )
+                    logger.info(f"Sent approved event details to requester {requester_id_str} for request {request_id}.")
+                except Exception as e:
+                    logger.error(f"Failed to send approved events to requester {requester_id_str} for request {request_id}: {e}", exc_info=True)
+                    # Requester might have blocked the bot or chat deleted.
+                    # Approver's message should reflect this.
+                    await query.edit_message_text(f"Access approved. However, could not send calendar details to the requester. They may have blocked me or the chat is no longer accessible.")
+                    return # Avoid overwriting with the generic "Access approved"
+
+                await query.edit_message_text("Access approved. Calendar details sent to the requester.")
+            else:
+                await query.edit_message_text("Failed to approve the request. Please try again.")
+                logger.error(f"Failed to update status to 'approved' for request {request_id}.")
+
+        elif action == "deny":
+            status_updated = await gs.update_calendar_access_request_status(request_id, "denied")
+            if status_updated:
+                logger.info(f"Request {request_id} denied by {user_id}.")
+                denial_message_to_requester = (
+                    f"Your request to view {target_username}'s calendar "
+                    f"from {nice_start_date} to {nice_end_date} has been denied."
+                )
+                try:
+                    await context.bot.send_message(
+                        chat_id=int(requester_id_str),
+                        text=denial_message_to_requester
+                    )
+                    logger.info(f"Sent denial notification to requester {requester_id_str} for request {request_id}.")
+                except Exception as e:
+                    logger.error(f"Failed to send denial notification to requester {requester_id_str} for request {request_id}: {e}", exc_info=True)
+                    await query.edit_message_text(f"Access denied. However, could not notify the requester. They may have blocked me or the chat is no longer accessible.")
+                    return # Avoid overwriting
+
+                await query.edit_message_text("Access denied. The requester has been notified.")
+            else:
+                await query.edit_message_text("Failed to deny the request. Please try again.")
+                logger.error(f"Failed to update status to 'denied' for request {request_id}.")
     else:
         logger.warning(f"Callback: Unhandled callback data: {callback_data}")
         try:
             await query.edit_message_text("Action not understood or expired.")
-        except Exception:
+        except Exception: # Broad exception for edit_message_text if message is too old etc.
+            logger.error(f"Failed to edit message for unhandled callback {callback_data}: {e}", exc_info=True)
             pass
 
 
@@ -710,4 +847,156 @@ async def glist_clear(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         logger.error(f"Failed to clear grocery list for user {user_id}.")
         await update.message.reply_text(
             "Sorry, there was a problem clearing your grocery list."
+        )
+
+
+# === Calendar Access Request Handler ===
+
+async def ask_calendar_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Handles the /ask_calendar command to request access to another user's calendar.
+    Usage: /ask_calendar @target_username YYYY-MM-DD to YYYY-MM-DD
+    """
+    user_id = update.effective_user.id
+    logger.info(f"User {user_id} initiated /ask_calendar command with args: {context.args}")
+
+    if len(context.args) != 4 or context.args[2].lower() != "to":
+        await update.message.reply_text(
+            "Usage: /ask_calendar @target_username YYYY-MM-DD to YYYY-MM-DD\n"
+            "Example: /ask_calendar @testuser 2024-03-10 to 2024-03-12"
+        )
+        return
+
+    target_username_with_at = context.args[0]
+    start_date_str = context.args[1]
+    end_date_str = context.args[3]
+    requester_id = update.effective_user.id
+
+    # --- Username to User ID Resolution ---
+    requested_user_id_str = DEFAULT_REQUESTED_USER_ID_PLACEHOLDER
+    mentioned_users = []
+    if update.message and update.message.entities:
+        for entity in update.message.entities:
+            if entity.type == 'mention':
+                # Extract username mentioned in the message text
+                offset = entity.offset
+                length = entity.length
+                mentioned_username = update.message.text[offset:offset + length]
+                if mentioned_username == target_username_with_at:
+                    # Check if there's a user associated with this mention entity
+                    if entity.user and entity.user.id:
+                         mentioned_users.append(str(entity.user.id))
+
+    if len(mentioned_users) == 1:
+        requested_user_id_str = mentioned_users[0]
+        logger.info(f"Extracted target user ID {requested_user_id_str} from mention for {target_username_with_at}")
+    elif len(mentioned_users) > 1:
+        logger.warning(
+            f"Multiple user IDs found for mention {target_username_with_at} in /ask_calendar from {requester_id}. "
+            f"Using placeholder {DEFAULT_REQUESTED_USER_ID_PLACEHOLDER}."
+        )
+        # Keep placeholder, or decide on a strategy (e.g., ask user to be more specific)
+    else: # No user found in entities for the given username
+        logger.warning(
+            f"Could not extract target user ID from mention for {target_username_with_at} in /ask_calendar from {requester_id}. "
+            f"Using placeholder {DEFAULT_REQUESTED_USER_ID_PLACEHOLDER}. "
+            f"This might happen if the mentioned user hasn't interacted with the bot or if it's a channel/group name."
+        )
+
+    # --- Date Parsing & Validation ---
+    try:
+        start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+        end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
+    except ValueError:
+        await update.message.reply_text(
+            "Invalid date format. Please use YYYY-MM-DD for dates.\n"
+            "Example: /ask_calendar @testuser 2024-03-10 to 2024-03-12"
+        )
+        return
+
+    if start_date > end_date:
+        await update.message.reply_text("Start date cannot be after end date.")
+        return
+
+    # Convert to ISO 8601 UTC strings
+    # Start of day for start_date, end of day for end_date
+    start_time_iso = datetime.combine(start_date, datetime.min.time()).replace(tzinfo=timezone.utc).isoformat()
+    end_time_iso = datetime.combine(end_date, datetime.max.time()).replace(tzinfo=timezone.utc).isoformat()
+    
+    logger.info(f"Requester {requester_id} asking for {requested_user_id_str} ({target_username_with_at}) "
+                f"from {start_time_iso} to {end_time_iso}")
+
+    # --- Storing the Request ---
+    # Ensure gs.create_calendar_access_request is an async function if it involves I/O
+    request_id = await gs.create_calendar_access_request(
+        requester_id=str(requester_id),  # Ensure IDs are strings for Firestore if not handled in gs
+        requested_user_id=requested_user_id_str,
+        start_time_iso=start_time_iso,
+        end_time_iso=end_time_iso,
+        target_username=target_username_with_at
+    )
+
+    # --- User Feedback & Notification to Requested User ---
+    if request_id:
+        nice_start_date = start_date.strftime("%B %d, %Y")
+        nice_end_date = end_date.strftime("%B %d, %Y")
+        requester_user = update.effective_user
+        requester_name_display = requester_user.first_name
+        if requester_user.username:
+            requester_name_display += f" (@{requester_user.username})"
+        else:
+            requester_name_display += f" (ID: {requester_user.id})" # Fallback if no username
+
+        requester_confirmation_message = (
+            f"Your request to view {target_username_with_at}'s calendar from "
+            f"{nice_start_date} to {nice_end_date} has been sent (Request ID: {request_id})."
+        )
+        logger.info(f"Calendar access request {request_id} stored for {requester_id} to {target_username_with_at} ({requested_user_id_str}).")
+
+        # Attempt to notify the requested user only if their ID was resolved
+        if requested_user_id_str != DEFAULT_REQUESTED_USER_ID_PLACEHOLDER:
+            notification_message = (
+                f"User {requester_name_display} wants to view your calendar events "
+                f"from {nice_start_date} to {nice_end_date}.\n\n"
+                f"Do you approve this request?"
+            )
+            keyboard = [
+                [
+                    InlineKeyboardButton("✅ Approve", callback_data=f"approve_access_{request_id}"),
+                    InlineKeyboardButton("❌ Deny", callback_data=f"deny_access_{request_id}")
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            try:
+                await context.bot.send_message(
+                    chat_id=int(requested_user_id_str), # Ensure it's int for API
+                    text=notification_message,
+                    reply_markup=reply_markup,
+                    parse_mode=ParseMode.HTML # Or MARKDOWN if preferred, adjust message format
+                )
+                logger.info(f"Sent access request notification to {requested_user_id_str} for request {request_id}.")
+            except Exception as e: # Catch specific telegram.error exceptions if needed
+                logger.error(
+                    f"Failed to send access request notification to {requested_user_id_str} for request {request_id}: {e}",
+                    exc_info=True
+                )
+                requester_confirmation_message += (
+                    f"\n\n⚠️ Could not directly notify {target_username_with_at}. "
+                    "They might need to start a chat with me first or check their privacy settings."
+                )
+        else:
+            # Inform requester that the target user couldn't be identified for direct notification
+            requester_confirmation_message += (
+                f"\n\n⚠️ Could not identify {target_username_with_at} to send a direct notification. "
+                "They will need to be informed of this request manually or by other means." # TODO: Future: list pending requests command
+            )
+            logger.info(f"Requested user ID for {target_username_with_at} is placeholder; no direct notification sent for request {request_id}.")
+
+        await update.message.reply_text(requester_confirmation_message, parse_mode=ParseMode.HTML)
+
+    else:
+        await update.message.reply_text("Could not save your access request. Please try again later.")
+        logger.error(
+            f"Failed to store calendar access request for {requester_id} to {target_username_with_at}."
         )

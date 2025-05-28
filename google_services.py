@@ -32,6 +32,7 @@ USER_TOKENS_COLLECTION = db.collection('user_tokens') if db else None
 # ---> NEW: Reference for preferences collection <---
 USER_PREFS_COLLECTION = db.collection(config.FS_COLLECTION_PREFS) if db else None
 FS_COLLECTION_GROCERY_LISTS = db.collection(config.FS_COLLECTION_GROCERY_LISTS) if db else None
+CALENDAR_ACCESS_REQUESTS_COLLECTION = db.collection('calendar_access_requests') if db else None
 # === Google Authentication & Firestore Persistence ===
 # --- NEW: Get Single Event by ID ---
 async def get_calendar_event_by_id(user_id: int, event_id: str) -> dict | None:
@@ -461,4 +462,110 @@ def delete_grocery_list(user_id: int) -> bool:
         return True
     except Exception as e:
         logger.error(f"GS: Error deleting grocery list for user {user_id}: {e}", exc_info=True)
+        return False
+
+
+# === Calendar Access Request Functions ===
+
+async def create_calendar_access_request(
+        requester_id: str,
+        requested_user_id: str,
+        start_time_iso: str,
+        end_time_iso: str,
+        target_username: str
+) -> str | None:
+    """
+    Creates a new calendar access request document in Firestore.
+
+    Args:
+        requester_id: Telegram ID of the user making the request.
+        requested_user_id: Telegram ID of the user whose calendar is being requested.
+                           Can be a placeholder if resolution failed.
+        start_time_iso: ISO 8601 string for the start of the access period.
+        end_time_iso: ISO 8601 string for the end of the access period.
+        target_username: The username string (e.g., "@someuser") of the requested user.
+
+    Returns:
+        The ID of the newly created document if successful, otherwise None.
+    """
+    if not CALENDAR_ACCESS_REQUESTS_COLLECTION:
+        logger.error("GS: Firestore CALENDAR_ACCESS_REQUESTS_COLLECTION unavailable.")
+        return None
+
+    try:
+        # Generate a new document reference with an auto-generated ID
+        doc_ref = CALENDAR_ACCESS_REQUESTS_COLLECTION.document()
+        request_data = {
+            'requester_id': str(requester_id),
+            'requested_user_id': str(requested_user_id),
+            'target_username': target_username,
+            'start_time_iso': start_time_iso,
+            'end_time_iso': end_time_iso,
+            'status': "pending",  # Initial status
+            'request_timestamp': firestore.SERVER_TIMESTAMP
+        }
+        # Set the data for the new document
+        write_result = await doc_ref.set(request_data) # Use await for async set if library supports/requires
+        logger.info(f"GS: Calendar access request created with ID {doc_ref.id}. Write time: {write_result.update_time}")
+        return doc_ref.id
+    except Exception as e:
+        logger.error(f"GS: Failed to create calendar access request in Firestore: {e}", exc_info=True)
+        return None
+
+
+async def get_calendar_access_request(request_id: str) -> dict | None:
+    """
+    Fetches a specific calendar access request document from Firestore by its ID.
+
+    Args:
+        request_id: The ID of the calendar access request document.
+
+    Returns:
+        A dictionary containing the document data if found, otherwise None.
+    """
+    if not CALENDAR_ACCESS_REQUESTS_COLLECTION:
+        logger.error("GS: Firestore CALENDAR_ACCESS_REQUESTS_COLLECTION unavailable for get.")
+        return None
+    try:
+        doc_ref = CALENDAR_ACCESS_REQUESTS_COLLECTION.document(request_id)
+        snapshot = await doc_ref.get() # Use await for async get
+        if snapshot.exists:
+            logger.info(f"GS: Successfully fetched calendar access request {request_id}.")
+            return snapshot.to_dict()
+        else:
+            logger.warning(f"GS: Calendar access request {request_id} not found.")
+            return None
+    except Exception as e:
+        logger.error(f"GS: Error fetching calendar access request {request_id}: {e}", exc_info=True)
+        return None
+
+
+async def update_calendar_access_request_status(request_id: str, status: str) -> bool:
+    """
+    Updates the status and response_timestamp of a calendar access request in Firestore.
+
+    Args:
+        request_id: The ID of the calendar access request document to update.
+        status: The new status string (e.g., "approved", "denied").
+
+    Returns:
+        True if the update was successful, False otherwise.
+    """
+    if not CALENDAR_ACCESS_REQUESTS_COLLECTION:
+        logger.error("GS: Firestore CALENDAR_ACCESS_REQUESTS_COLLECTION unavailable for update.")
+        return False
+    try:
+        doc_ref = CALENDAR_ACCESS_REQUESTS_COLLECTION.document(request_id)
+        update_data = {
+            'status': status,
+            'response_timestamp': firestore.SERVER_TIMESTAMP
+        }
+        write_result = await doc_ref.update(update_data) # Use await for async update
+        logger.info(f"GS: Successfully updated status of request {request_id} to '{status}'. Write time: {write_result.update_time}")
+        return True
+    except NotFound:
+        logger.warning(f"GS: Calendar access request {request_id} not found during status update.")
+        return False
+    except Exception as e:
+        logger.error(f"GS: Failed to update status for request {request_id}: {e}", exc_info=True)
         return False

@@ -16,6 +16,7 @@ from handlers import (
     glist_add,
     glist_clear,
     glist_show,
+    ask_calendar_command, # <-- Import new handler
 )
 import config # Load config first (initializes Firestore, etc.)
 import handlers
@@ -101,6 +102,9 @@ def main() -> None:
     application.add_handler(CommandHandler("glist_add", handlers.glist_add))
     application.add_handler(CommandHandler("glist_show", handlers.glist_show))
     application.add_handler(CommandHandler("glist_clear", handlers.glist_clear))
+
+    # Calendar Access Request Command Handler
+    application.add_handler(CommandHandler("ask_calendar", handlers.ask_calendar_command))
 
     # Message Handler (for natural language processing)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.handle_message))
