@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from dateutil import parser as dateutil_parser
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
-from telegram.constants import ParseMode
+from telegram.constants import ParseMode, MessageEntityType # Ensure MessageEntityType is imported
 # Timezone libraries
 import pytz
 from pytz.exceptions import UnknownTimeZoneError
@@ -878,7 +878,7 @@ async def ask_calendar_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
     if update.message and update.message.entities:
         for entity in update.message.entities:
-            if entity.type == ParseMode.MENTION: # telegram.constants.MessageEntityType.MENTION is 'mention'
+            if entity.type == MessageEntityType.MENTION: # Corrected from ParseMode.MENTION
                 # Extract username text from the message using entity's offset and length
                 username_from_entity_text = update.message.text[entity.offset : entity.offset + entity.length]
                 
