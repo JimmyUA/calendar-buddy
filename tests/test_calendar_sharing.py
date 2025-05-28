@@ -49,11 +49,22 @@ class TestCalendarSharing(unittest.TestCase):
         mock_update = MagicMock(spec=Update)
         mock_update.effective_user = User(id=requester_user_id, first_name=requester_first_name, is_bot=False, username=requester_username)
         
-        # Simulate a message with a mention
-        mock_message_entity = MessageEntity(type=MessageEntity.MENTION, offset=0, length=len(target_username_with_at), user=User(id=requested_user_id, first_name="Test", is_bot=False, username="testuser"))
+        command_text = "/ask_calendar"
+        full_message_text = f"{command_text} {target_username_with_at} {start_date_str} to {end_date_str}"
+        
+        # Entity for the bot command itself
+        bot_command_entity = MessageEntity(type=MessageEntity.BOT_COMMAND, offset=0, length=len(command_text))
+        
+        # Entity for the mention
+        # Offset is after "/ask_calendar "
+        mention_offset = len(command_text) + 1 
+        mention_length = len(target_username_with_at)
+        mock_mentioned_user_obj = User(id=requested_user_id, first_name="TestMentioned", is_bot=False, username=target_username_with_at.lstrip('@'))
+        mention_entity = MessageEntity(type=MessageEntity.MENTION, offset=mention_offset, length=mention_length, user=mock_mentioned_user_obj)
+
         mock_update.message = MagicMock(spec=Message)
-        mock_update.message.text = f"/ask_calendar {target_username_with_at} {start_date_str} to {end_date_str}"
-        mock_update.message.entities = [mock_message_entity]
+        mock_update.message.text = full_message_text
+        mock_update.message.entities = [bot_command_entity, mention_entity]
         mock_update.message.reply_text = AsyncMock()
 
         # --- Mock Context ---
@@ -204,10 +215,21 @@ class TestCalendarSharing(unittest.TestCase):
 
         mock_update = MagicMock(spec=Update)
         mock_update.effective_user = User(id=requester_user_id, first_name="Requester", is_bot=False, username="req_user")
-        # Simulate no mention entity or mention without user.id
+        # Simulate a mention entity that matches target_username_with_at but has entity.user = None
+        command_text = "/ask_calendar"
+        full_message_text = f"{command_text} {target_username_with_at} 2024-01-01 to 2024-01-05"
+
+        bot_command_entity = MessageEntity(type=MessageEntity.BOT_COMMAND, offset=0, length=len(command_text))
+        
+        # Entity for the mention
+        mention_offset = len(command_text) + 1
+        mention_length = len(target_username_with_at)
+        # IMPORTANT: entity.user is None for this test case
+        mention_entity_no_user = MessageEntity(type=MessageEntity.MENTION, offset=mention_offset, length=mention_length, user=None) 
+                                             
         mock_update.message = MagicMock(spec=Message)
-        mock_update.message.text = f"/ask_calendar {target_username_with_at} 2024-01-01 to 2024-01-05"
-        mock_update.message.entities = [MessageEntity(type=MessageEntity.MENTION, offset=0, length=len(target_username_with_at), user=None)] # No user.id in entity
+        mock_update.message.text = full_message_text
+        mock_update.message.entities = [bot_command_entity, mention_entity_no_user]
         mock_update.message.reply_text = AsyncMock()
 
         mock_context = MagicMock()

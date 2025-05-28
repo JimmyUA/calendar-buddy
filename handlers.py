@@ -874,33 +874,40 @@ async def ask_calendar_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
     # --- Username to User ID Resolution ---
     requested_user_id_str = DEFAULT_REQUESTED_USER_ID_PLACEHOLDER
-    mentioned_users = []
+    # target_username_with_at is from context.args[0], e.g., "@testuser"
+
     if update.message and update.message.entities:
         for entity in update.message.entities:
-            if entity.type == 'mention':
-                # Extract username mentioned in the message text
-                offset = entity.offset
-                length = entity.length
-                mentioned_username = update.message.text[offset:offset + length]
-                if mentioned_username == target_username_with_at:
-                    # Check if there's a user associated with this mention entity
+            if entity.type == ParseMode.MENTION: # telegram.constants.MessageEntityType.MENTION is 'mention'
+                # Extract username text from the message using entity's offset and length
+                username_from_entity_text = update.message.text[entity.offset : entity.offset + entity.length]
+                
+                # Check if this entity corresponds to the target_username_with_at from args
+                if username_from_entity_text == target_username_with_at:
                     if entity.user and entity.user.id:
-                         mentioned_users.append(str(entity.user.id))
-
-    if len(mentioned_users) == 1:
-        requested_user_id_str = mentioned_users[0]
-        logger.info(f"Extracted target user ID {requested_user_id_str} from mention for {target_username_with_at}")
-    elif len(mentioned_users) > 1:
+                        requested_user_id_str = str(entity.user.id)
+                        logger.info(
+                            f"Extracted user ID {requested_user_id_str} from MessageEntity.user.id "
+                            f"for target username {target_username_with_at}."
+                        )
+                        break  # Found the target user's ID, no need to check other entities
+                    else:
+                        logger.warning(
+                            f"Mention entity for {target_username_with_at} found, but it does not contain a user.id. "
+                            f"This can happen for mentions of users not in contact, or channel mentions. "
+                            f"Using placeholder ID for {target_username_with_at}."
+                        )
+                        # Keep placeholder, and break since we found the relevant @username arg
+                        break 
+    
+    if requested_user_id_str == DEFAULT_REQUESTED_USER_ID_PLACEHOLDER:
+        # This logging will now occur if the loop completes without finding a matching entity.user.id
+        # or if the matching entity had no user.id.
         logger.warning(
-            f"Multiple user IDs found for mention {target_username_with_at} in /ask_calendar from {requester_id}. "
-            f"Using placeholder {DEFAULT_REQUESTED_USER_ID_PLACEHOLDER}."
-        )
-        # Keep placeholder, or decide on a strategy (e.g., ask user to be more specific)
-    else: # No user found in entities for the given username
-        logger.warning(
-            f"Could not extract target user ID from mention for {target_username_with_at} in /ask_calendar from {requester_id}. "
-            f"Using placeholder {DEFAULT_REQUESTED_USER_ID_PLACEHOLDER}. "
-            f"This might happen if the mentioned user hasn't interacted with the bot or if it's a channel/group name."
+            f"Could not reliably extract target user ID for {target_username_with_at} from message entities. "
+            f"Requester: {requester_id}. Using placeholder {DEFAULT_REQUESTED_USER_ID_PLACEHOLDER}. "
+            f"This might happen if the mentioned user hasn't interacted with the bot, "
+            f"is not a known contact, or the mention is a channel/group name without an associated user ID in the entity."
         )
 
     # --- Date Parsing & Validation ---
