@@ -81,3 +81,41 @@ def test_format_to_nice_date_invalid_date_parts():
 # If you intended to convert the datetime to a *specific* target timezone
 # before formatting, you would need to use `dt.astimezone(ZoneInfo("Your/TargetZone"))`.
 # The current tests reflect the behavior of your provided function.
+
+from utils import escape_markdown_v2
+
+class TestEscapeMarkdownV2:
+    def test_no_special_chars(self):
+        assert escape_markdown_v2("Hello world") == "Hello world"
+
+    def test_all_special_chars(self):
+        # _ * [ ] ( ) ~ ` > # + - = | { } . !
+        original = "_*[]()~`>#+-=|{}.!"
+        expected = "\_\*\[\]\(\)\~\`\>\#\+\-\=\|\{\}\.\!"
+        assert escape_markdown_v2(original) == expected
+
+    def test_mixed_content(self):
+        original = "This is a (test). It should *work*! #important"
+        expected = "This is a \(test\)\. It should \*work\*\! \#important"
+        assert escape_markdown_v2(original) == expected
+
+    def test_empty_string(self):
+        assert escape_markdown_v2("") == ""
+
+    def test_already_escaped_chars(self):
+        # Assuming \ is NOT a character that escape_markdown_v2 itself escapes.
+        # So, "Hello \(world\)" becomes "Hello \\\(world\\\)"
+        # because '(' and ')' are escaped.
+        original = "Hello \(world\)"
+        expected = "Hello \\\(world\\\)"
+        assert escape_markdown_v2(original) == expected
+
+    def test_only_special_chars_short(self):
+        original = ".-_"
+        expected = "\.\-\_"
+        assert escape_markdown_v2(original) == expected
+    
+    def test_numbers_and_special_chars(self):
+        original = "1. Item (first)"
+        expected = "1\. Item \(first\)"
+        assert escape_markdown_v2(original) == expected

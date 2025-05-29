@@ -18,7 +18,7 @@ from handler.message_formatter import create_final_message
 from llm import llm_service
 from llm.agent import initialize_agent
 from time_util import format_to_nice_date
-from utils import _format_event_time
+from utils import _format_event_time, escape_markdown_v2
 
 logger = logging.getLogger(__name__)
 
@@ -881,9 +881,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             events = await gs.get_calendar_events(int(target_user_id), start_time_iso, end_time_iso)
             logger.info(f"[REQ_ID: {request_id}] gs.get_calendar_events returned at {time.time()}")
 
-            events_summary_message = f"🗓️ Calendar events for {request_data.get('requester_name', 'them')} " \
-                                     f"(from your calendar) for the period:\n"
-
+            escaped_requester_name = escape_markdown_v2(str(request_data.get('requester_name', 'them')))
+            events_summary_message = f"🗓️ Calendar events for {escaped_requester_name} " \
+                                     f"(from your calendar) for the period:\n" # Note: \n for MarkdownV2 newline
             target_tz_str = await gs.get_user_timezone_str(int(target_user_id)) # MODIFIED
             target_tz = pytz.timezone(target_tz_str) if target_tz_str else pytz.utc
 
@@ -894,16 +894,29 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             else:
                 for event in events:
                     time_str = _format_event_time(event, target_tz)
-                    events_summary_message += f"\n- *{html.escape(event.get('summary', 'No Title'))}* ({time_str})"
-
+                    # Apply escape_markdown_v2 to summary and time_str
+                    summary_text = escape_markdown_v2(event.get('summary', 'No Title'))
+                    escaped_time_str = escape_markdown_v2(time_str)
+# Ensure literal parentheses are escaped for MarkdownV2
+                    events_summary_message += f"\n- *{summary_text}* \({escaped_time_str}\)"
+            
             try:
                 logger.info(f"[REQ_ID: {request_id}] About to send message to requester at {time.time()}")
+
+                # Escape dynamic parts for the main message
+                target_user_display = escape_markdown_v2(str(request_data.get('target_user_id', 'the user')))
+                period_start_display = escape_markdown_v2(_format_iso_datetime_for_display(start_time_iso))
+                period_end_display = escape_markdown_v2(_format_iso_datetime_for_display(end_time_iso))
+
+                requester_notification_text = (
+                    f"🎉 Your calendar access request for {target_user_display} "
+                    f"(for period {period_start_display} to {period_end_display}) was APPROVED.\n\n"
+                    f"{events_summary_message}" # events_summary_message components are already individually escaped
+                )
+
                 await context.bot.send_message(
                     chat_id=requester_id,
-                    text=f"🎉 Your calendar access request for {html.escape(request_data.get('target_user_id', 'the user'))} "
-                         f"(for period {_format_iso_datetime_for_display(start_time_iso)} to "
-                         f"{_format_iso_datetime_for_display(end_time_iso)}) was APPROVED.\n\n"
-                         f"{events_summary_message}",
+                    text=requester_notification_text,
                     parse_mode=ParseMode.MARKDOWN_V2
                 )
                 logger.info(f"[REQ_ID: {request_id}] Message sent to requester at {time.time()}")
