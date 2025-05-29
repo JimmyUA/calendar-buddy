@@ -42,4 +42,13 @@ def _format_event_time(event: dict, user_tz: pytz.BaseTzInfo) -> str:
         logger.error(f"Error parsing/formatting event time: {e}. Event ID: {event.get('id')}, Start: '{start_str}', End: '{end_str}'", exc_info=True)
         return f"{start_str} [Error Formatting]"
 
+def escape_markdown_v2(text: str) -> str:
+    """Escapes special characters for Telegram MarkdownV2."""
+    escape_chars = r'_*[]()~`>#+-=|{}.!' # Corrected: removed 煖 and ensured - is present
+    # In MarkdownV2, reserved characters are: _ * [ ] ( ) ~ ` > # + - = | { } . !
+    # All of these characters must be escaped with a preceding '\' character.
+    for char in escape_chars:
+        text = text.replace(char, '\\' + char)
+    return text
+
 # Add any other general utility functions here later
