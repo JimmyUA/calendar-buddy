@@ -170,10 +170,9 @@ async def get_calendar_event_by_id(user_id: int, event_id: str) -> dict | None:
         return None
 
 # --- Timezone Functions (Using NEW Collection) ---
-def set_user_timezone(user_id: int, timezone_str: str, username: str | None = None) -> bool:
+def set_user_timezone(user_id: int, timezone_str: str) -> bool:
     """
-    Stores the user's validated IANA timezone string and optionally their Telegram username
-    in Firestore.
+    Stores the user's validated IANA timezone string in Firestore.
     """
     if not USER_PREFS_COLLECTION:
         logger.error("Firestore USER_PREFS_COLLECTION unavailable for setting timezone/username.")
@@ -188,20 +187,14 @@ def set_user_timezone(user_id: int, timezone_str: str, username: str | None = No
             'timezone': timezone_str,
             'updated_at': firestore.SERVER_TIMESTAMP
         }
-        if username:
-            data_to_set['telegram_username'] = username
-            logger.info(f"Preparing to store timezone '{timezone_str}' and username '{username}' for user {user_id}")
-        else:
-            logger.info(f"Preparing to store timezone '{timezone_str}' for user {user_id} (no username provided)")
+        logger.info(f"Preparing to store timezone '{timezone_str}' for user {user_id}")
 
         # Using set with merge=True to avoid overwriting other potential preferences
+        # (like a previously stored username, though we are removing that functionality)
         # and to create the document if it doesn't exist.
         doc_ref.set(data_to_set, merge=True)
 
-        if username:
-            logger.info(f"Stored timezone '{timezone_str}' and username '{username}' for user {user_id} in '{config.FS_COLLECTION_PREFS}'")
-        else:
-            logger.info(f"Stored timezone '{timezone_str}' for user {user_id} in '{config.FS_COLLECTION_PREFS}'")
+        logger.info(f"Stored timezone '{timezone_str}' for user {user_id} in '{config.FS_COLLECTION_PREFS}'")
         return True
     except UnknownTimeZoneError:
         logger.warning(f"Attempted to store invalid timezone '{timezone_str}' for user {user_id}")

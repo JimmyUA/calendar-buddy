@@ -1,9 +1,9 @@
 # handlers.py
 import html
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone # Ensure datetime is imported from datetime
 from dateutil import parser as dateutil_parser # type: ignore
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup, KeyboardButtonRequestUsers
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram.constants import ParseMode
 # Timezone libraries
@@ -366,7 +366,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     /glist_add `<item1> [item2 ...]` - Adds items to your grocery list.
     /glist_show - Shows your current grocery list.
     /glist_clear - Clears your entire grocery list.
-    /request_access `@username <time_period>` - Request access to another user's calendar.
+    /request_access `<time_period>` - Request calendar access from another user for a specific period.
     /help - Show this help message.
     """
     await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
@@ -374,57 +374,35 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 async def request_calendar_access_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
-    Handles the /request_access command to request calendar access from another user.
-    Expected format: /request_access @target_username <natural language time period>
-    Example: /request_access @bob_the_user tomorrow from 10am to 2pm
+    Handles the /request_access command.
+    Step 1: Parses time period and prompts user to select a target user.
+    Expected format: /request_access <natural language time period>
+    Example: /request_access tomorrow from 10am to 2pm
     """
     assert update.effective_user is not None, "Effective user should not be None"
     assert update.message is not None, "Update message should not be None"
+    assert context.user_data is not None, "Context user_data should not be None"
 
     requester_id = update.effective_user.id
-    requester_name = update.effective_user.first_name # Or full_name, as preferred
+    logger.info(f"User {requester_id} initiated /request_access (Step 1) with args: {context.args}")
 
-    logger.info(f"User {requester_id} ({requester_name}) initiated /request_access with args: {context.args}")
-
-    if not context.args or len(context.args) < 2:
+    if not context.args:
         await update.message.reply_text(
-            "Usage: /request_access @target_username <time period>\n"
-            "Example: /request_access @bob_the_user tomorrow 10am to 2pm"
+            "Usage: /request_access <time period description>\n"
+            "Example: /request_access tomorrow 10am to 2pm"
         )
         return
 
-    target_username_with_at = context.args[0]
-    time_period_str = " ".join(context.args[1:])
-
-    if not target_username_with_at.startswith('@'):
-        await update.message.reply_text("Target username must start with '@'.")
-        return
-    target_username = target_username_with_at[1:]
+    time_period_str = " ".join(context.args)
 
     # 1. Check if requester is connected to Google Calendar
     if not gs.is_user_connected(requester_id):
         await update.message.reply_text("You need to connect your Google Calendar first. Use /connect_calendar.")
         return
 
-    # 2. Resolve target_username to target_user_id
-    logger.info(f"Resolving target username '{target_username}' for requester {requester_id}")
-    target_user_id_str = gs.get_user_id_by_username(target_username)
-
-    if not target_user_id_str:
-        await update.message.reply_text(
-            f"Could not find user '{html.escape(target_username_with_at)}'. "
-            "They might not have used this bot or set their username."
-        )
-        return
-
-    if target_user_id_str == str(requester_id):
-        await update.message.reply_text("You cannot request calendar access from yourself.")
-        return
-
-    # 3. Parse the time period
+    # 2. Parse the time period
     requester_tz = await _get_user_tz_or_prompt(update, context)
-    if not requester_tz:
-        # _get_user_tz_or_prompt already sent a message
+    if not requester_tz: # _get_user_tz_or_prompt already sent a message
         return
 
     now_local_requester = datetime.now(requester_tz)
@@ -440,75 +418,190 @@ async def request_calendar_access_command(update: Update, context: ContextTypes.
     start_time_iso = parsed_range['start_iso']
     end_time_iso = parsed_range['end_iso']
 
+    # Store parsed period in user_data for the next step (handling UsersShared)
+    context.user_data['calendar_request_period'] = {
+        'original': time_period_str,
+        'start_iso': start_time_iso,
+        'end_iso': end_time_iso
+    }
+
     # Log the parsed times for verification
     try:
         start_dt_req_tz = dateutil_parser.isoparse(start_time_iso).astimezone(requester_tz)
         end_dt_req_tz = dateutil_parser.isoparse(end_time_iso).astimezone(requester_tz)
-        logger.info(f"Parsed time range for request: {start_dt_req_tz.strftime('%Y-%m-%d %H:%M:%S %Z')} to {end_dt_req_tz.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+        logger.info(f"User {requester_id} stored time period for calendar request: {start_dt_req_tz.strftime('%Y-%m-%d %H:%M:%S %Z')} to {end_dt_req_tz.strftime('%Y-%m-%d %H:%M:%S %Z')}")
     except Exception as e:
-        logger.error(f"Error formatting parsed dates for logging: {e}")
+        logger.error(f"Error formatting parsed dates for logging (user {requester_id}): {e}")
 
+    # 3. Send "Select User" prompt with KeyboardButtonRequestUsers
+    keyboard_request_id = int(datetime.now().timestamp())
+    context.user_data['select_user_request_id'] = keyboard_request_id
 
-    # 4. Store the access request
-    request_id = gs.add_calendar_access_request(
-        requester_id=str(requester_id),
-        requester_name=requester_name,
-        target_user_id=target_user_id_str,
-        start_time_iso=start_time_iso,
-        end_time_iso=end_time_iso
+    button_request_users_config = KeyboardButtonRequestUsers(
+        request_id=keyboard_request_id,
+        user_is_bot=False,
+        max_quantity=1
+    )
+    button_select_user = KeyboardButton(
+        text="Select User To Request Access From",
+        request_users=button_request_users_config
+    )
+    reply_markup = ReplyKeyboardMarkup(
+        keyboard=[[button_select_user]],
+        resize_keyboard=True,
+        one_time_keyboard=True
     )
 
-    if not request_id:
-        await update.message.reply_text(
-            "Sorry, there was an internal error trying to store your access request. Please try again later."
+    await update.message.reply_text(
+        "Okay, I have the time period: "
+        f"\"<b>{html.escape(time_period_str)}</b>\".\n"
+        "Now, please select the user you want to request calendar access from using the button below.",
+        reply_markup=reply_markup,
+        parse_mode=ParseMode.HTML
+    )
+    logger.info(f"User {requester_id} prompted to select target user for calendar access request (KB request ID: {keyboard_request_id}).")
+
+
+async def users_shared_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Handles the response from KeyboardButtonRequestUsers.
+    This is Step 2 of the calendar access request flow.
+    """
+    assert update.effective_user is not None, "Effective user (requester) should not be None"
+    assert update.message is not None, "Update message should not be None for users_shared"
+    assert update.message.users_shared is not None, "users_shared should not be None"
+    assert context.user_data is not None, "Context user_data should not be None"
+
+    requester_id = str(update.effective_user.id)
+    requester_name = update.effective_user.first_name or "User" # Fallback for requester name
+    requester_username = update.effective_user.username # May be None
+
+    received_request_id = update.message.users_shared.request_id
+    expected_request_id = context.user_data.get('select_user_request_id')
+
+    logger.info(f"User {requester_id} shared users for keyboard request ID {received_request_id}. Expecting: {expected_request_id}")
+
+    # Remove the reply keyboard as soon as possible.
+    # We need to send a new message to do this if the users_shared update doesn't allow direct reply_markup removal.
+    # A simple ack message is fine.
+    # Note: The `update.message.reply_text` here is associated with the `users_shared` status update,
+    # not a new command from the user. It effectively sends a new message to the chat.
+    from telegram import ReplyKeyboardRemove # Local import for clarity
+    await update.message.reply_text("Processing your selection...", reply_markup=ReplyKeyboardRemove())
+
+
+    if expected_request_id is None or received_request_id != expected_request_id:
+        logger.warning(
+            f"User {requester_id} triggered UsersShared with unexpected/expired request_id: "
+            f"Received {received_request_id}, expected {expected_request_id}."
         )
+        # Send message via context.bot as update.message might not be suitable for a new message here
+        await context.bot.send_message(chat_id=requester_id, text="This user selection is unexpected or has expired. Please try the /request_access command again.")
         return
 
-    # 5. Inform Requester
-    await update.message.reply_text(
-        f"✅ Your request to access {html.escape(target_username_with_at)}'s calendar for the period "
-        f"'{html.escape(time_period_str)}' has been sent.\n"
-        f"Request ID: `{request_id}`. You will be notified when they respond."
+    if not update.message.users_shared.users:
+        logger.warning(f"User {requester_id} used user picker but shared no users for request_id {received_request_id}.")
+        await context.bot.send_message(chat_id=requester_id, text="No user was selected. Please try again if you want to request access.")
+        # Clear data as the flow is aborted
+        context.user_data.pop('select_user_request_id', None)
+        context.user_data.pop('calendar_request_period', None)
+        return
+
+    target_user = update.message.users_shared.users[0]
+    target_user_id = str(target_user.user_id)
+    # Use target_user.first_name, and if not available, try target_user.username, then a generic fallback.
+    target_user_first_name = target_user.first_name or target_user.username or f"User ID {target_user_id}"
+
+
+    request_period_data = context.user_data.get('calendar_request_period')
+
+    # Clear temporary data now that we have the target user and period
+    context.user_data.pop('select_user_request_id', None)
+    context.user_data.pop('calendar_request_period', None)
+
+    if not request_period_data:
+        logger.error(f"User {requester_id}: calendar_request_period missing after user selection for target {target_user_id}.")
+        await context.bot.send_message(chat_id=requester_id, text="Something went wrong, I don't have the time period for your request. Please start over with /request_access.")
+        return
+
+    start_iso = request_period_data['start_iso']
+    end_iso = request_period_data['end_iso']
+    original_period_str = request_period_data['original']
+
+    if target_user_id == requester_id:
+        await context.bot.send_message(chat_id=requester_id, text="You cannot request calendar access from yourself. Please try again with a different user.")
+        return
+
+    logger.info(f"User {requester_id} selected target user {target_user_id} ({target_user_first_name}) for period '{original_period_str}'")
+
+    # Store Access Request in Firestore
+    request_doc_id = gs.add_calendar_access_request(
+        requester_id=requester_id,
+        requester_name=requester_name,
+        target_user_id=target_user_id,
+        start_time_iso=start_iso,
+        end_time_iso=end_iso
     )
 
-    # 6. Notify Target User
-    target_user_tz_str = gs.get_user_timezone_str(int(target_user_id_str)) # Fetch target's TZ for display
-    start_display = _format_iso_datetime_for_display(start_time_iso, target_user_tz_str)
-    end_display = _format_iso_datetime_for_display(end_time_iso, target_user_tz_str)
+    if not request_doc_id:
+        await context.bot.send_message(chat_id=requester_id, text="Sorry, there was an internal error trying to store your access request. Please try again later.")
+        return
 
-    notification_message = (
+    # Inform Requester
+    await context.bot.send_message(
+        chat_id=requester_id,
+        text=f"Great! Your calendar access request for '<b>{html.escape(original_period_str)}</b>' "
+             f"has been sent to <b>{html.escape(target_user_first_name)}</b>."
+             f" (Request ID: `{request_doc_id}`)", # Added request ID for requester's reference
+        parse_mode=ParseMode.HTML
+    )
+
+    # Notify Target User
+    target_user_tz_str = gs.get_user_timezone_str(int(target_user_id)) # Fetch target's TZ for display
+    start_display_for_target = _format_iso_datetime_for_display(start_iso, target_user_tz_str)
+    end_display_for_target = _format_iso_datetime_for_display(end_iso, target_user_tz_str)
+
+    # Get target user's Telegram username if available (from the shared user object)
+    target_telegram_username = target_user.username or "N/A"
+
+
+    target_message = (
         f"🔔 Calendar Access Request\n\n"
-        f"User <b>{html.escape(requester_name)}</b> (Telegram: @{update.effective_user.username or 'N/A'}) "
+        f"User <b>{html.escape(requester_name)}</b> (Telegram: @{requester_username or 'N/A'}) "
         f"would like to view your calendar events for the period:\n"
-        f"<b>From:</b> {start_display}\n"
-        f"<b>To:</b>   {end_display}\n\n"
+        f"<b>From:</b> {start_display_for_target}\n"
+        f"<b>To:</b>   {end_display_for_target}\n"
+        f"(Original request from user: \"<i>{html.escape(original_period_str)}</i>\")\n\n"
         f"Do you approve this request?"
     )
-    keyboard = [
+
+    inline_keyboard = [
         [
-            InlineKeyboardButton("✅ Approve Access", callback_data=f"approve_access_{request_id}"),
-            InlineKeyboardButton("❌ Deny Access", callback_data=f"deny_access_{request_id}")
+            InlineKeyboardButton("✅ Approve Access", callback_data=f"approve_access_{request_doc_id}"),
+            InlineKeyboardButton("❌ Deny Access", callback_data=f"deny_access_{request_doc_id}")
         ]
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    inline_reply_markup = InlineKeyboardMarkup(inline_keyboard)
 
     try:
         await context.bot.send_message(
-            chat_id=target_user_id_str,
-            text=notification_message,
-            reply_markup=reply_markup,
+            chat_id=target_user_id,
+            text=target_message,
+            reply_markup=inline_reply_markup,
             parse_mode=ParseMode.HTML
         )
-        logger.info(f"Sent access request notification {request_id} to target user {target_user_id_str}.")
+        logger.info(f"Sent access request notification (ID: {request_doc_id}) to target user {target_user_id}.")
     except Exception as e:
-        logger.error(f"Failed to send access request notification to target user {target_user_id_str}: {e}", exc_info=True)
-        # Inform requester that notification might have failed
-        await update.message.reply_text(
-            "Your request was stored, but I encountered an issue notifying the target user. "
-            "They may not receive the request if they have blocked the bot or if there's a Telegram issue."
+        logger.error(f"Failed to send access request notification to target user {target_user_id} for request {request_doc_id}: {e}", exc_info=True)
+        # Inform requester
+        await context.bot.send_message(
+             chat_id=requester_id,
+             text=f"I've stored your request for <b>{html.escape(target_user_first_name)}</b> (Request ID: `{request_doc_id}`), "
+                  "but I couldn't send them a direct notification. This can happen if they haven't started a chat with me, "
+                  "or if they have blocked the bot. You might need to share the Request ID with them manually.",
+             parse_mode=ParseMode.HTML
         )
-        # Potentially update the request status to 'error_notifying' or similar
-        gs.update_calendar_access_request_status(request_id, "error_notifying_target")
+        gs.update_calendar_access_request_status(request_doc_id, "error_notifying_target")
 
 
 async def connect_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -780,7 +873,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
             events_summary_message = f"🗓️ Calendar events for {request_data.get('requester_name', 'them')} " \
                                      f"(from your calendar) for the period:\n"
-            
+
             # Determine target's timezone for event display to requester
             target_tz_str = gs.get_user_timezone_str(int(target_user_id))
             target_tz = pytz.timezone(target_tz_str) if target_tz_str else pytz.utc # Default to UTC
@@ -793,7 +886,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 for event in events:
                     time_str = _format_event_time(event, target_tz) # Format with target's TZ
                     events_summary_message += f"\n- *{html.escape(event.get('summary', 'No Title'))}* ({time_str})"
-            
+
             try:
                 await context.bot.send_message(
                     chat_id=requester_id,
@@ -806,7 +899,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             except Exception as e:
                 logger.error(f"Failed to send approved notification to requester {requester_id} for request {request_id}: {e}")
                 # Update request status to indicate error?
-            
+
             await query.edit_message_text(text="Access request APPROVED. The requester has been notified with the events.")
         else:
             await query.edit_message_text("Failed to update request status. Please try again.")
@@ -822,7 +915,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if request_data.get('status') != "pending" and request_data.get('status') != "error_notifying_target":
             await query.edit_message_text(f"This request has already been actioned (status: {request_data.get('status')}).")
             return
-        
+
         target_user_id = str(user_id) # The user clicking is the target
         if target_user_id != request_data.get('target_user_id'):
             logger.warning(f"User {user_id} tried to deny request {request_id} not meant for them (target: {request_data.get('target_user_id')})")
@@ -844,7 +937,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.edit_message_text(text="Access request DENIED. The requester has been notified.")
         else:
             await query.edit_message_text("Failed to update request status. Please try again.")
-            
+
     else:
         logger.warning(f"Callback: Unhandled callback data: {callback_data}")
         try:
@@ -902,11 +995,7 @@ async def received_timezone(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         if success:
             await update.message.reply_text(f"✅ Timezone set to `{timezone_str}` successfully!",
                                             parse_mode=ParseMode.MARKDOWN)
-            if username:
-                logger.info(f"Successfully set timezone and potentially username for user {user_id}")
-            else:
-                logger.info(f"Successfully set timezone for user {user_id} (no username available/provided)")
-            logger.info(f"Successfully set timezone for user {user_id}")
+            logger.info(f"Successfully set timezone for user {user_id} (username not stored).")
             return ConversationHandler.END  # End conversation
         else:
             await update.message.reply_text("Sorry, there was an error saving your timezone. Please try again.")

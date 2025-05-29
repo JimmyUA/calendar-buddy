@@ -112,6 +112,9 @@ def main() -> None:
     # Message Handler (now invokes the agent)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.handle_message))
 
+    # Handler for UsersShared status update (for KeyboardButtonRequestUsers)
+    application.add_handler(MessageHandler(filters.StatusUpdate.USERS_SHARED, handlers.users_shared_handler))
+
     # Error Handler (Register last)
     application.add_error_handler(handlers.error_handler)
 
