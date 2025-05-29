@@ -883,7 +883,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
             escaped_requester_name = escape_markdown_v2(str(request_data.get('requester_name', 'them')))
             events_summary_message = f"🗓️ Calendar events for {escaped_requester_name} " \
-                                     f"(from your calendar) for the period:\n" # Note: \n for MarkdownV2 newline
+                                     f"\(from your calendar\) for the period:\n" # Note the escaped \( and \)
             
             target_tz_str = await gs.get_user_timezone_str(int(target_user_id)) # MODIFIED
             target_tz = pytz.timezone(target_tz_str) if target_tz_str else pytz.utc
@@ -911,7 +911,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
                 requester_notification_text = (
                     f"🎉 Your calendar access request for {target_user_display} "
-                    f"(for period {period_start_display} to {period_end_display}) was APPROVED.\n\n"
+                    f"\(for period {period_start_display} to {period_end_display}\) was APPROVED.\n\n"  # Note the escaped \( and \)
                     f"{events_summary_message}" # events_summary_message components are already individually escaped
                 )
                 
