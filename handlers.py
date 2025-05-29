@@ -1,6 +1,7 @@
 # handlers.py
 import html
 import logging
+import time # Added for timestamp logging
 from datetime import datetime, timedelta, timezone # Ensure datetime is imported from datetime
 from dateutil import parser as dateutil_parser # type: ignore
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup, KeyboardButtonRequestUsers
@@ -62,7 +63,7 @@ async def _get_user_tz_or_prompt(update: Update, context: ContextTypes.DEFAULT_T
     """Gets user timezone object or prompts them to set it, returning None if prompt sent."""
     user_id = update.effective_user.id
     assert update.message is not None, "Update message should not be None for _get_user_tz_or_prompt"
-    tz_str = gs.get_user_timezone_str(user_id)
+    tz_str = await gs.get_user_timezone_str(user_id) # MODIFIED
     if tz_str:
         try:
             return pytz.timezone(tz_str)
@@ -229,7 +230,7 @@ async def _handle_calendar_create(update: Update, context: ContextTypes.DEFAULT_
                        f"<b>End:</b> {end_confirm}\n<b>Desc:</b> {event_details.get('description', 'N/A')}\n" \
                        f"<b>Loc:</b> {event_details.get('location', 'N/A')}"
 
-        if add_pending_event(user_id, google_event_data):
+        if await add_pending_event(user_id, google_event_data): # MODIFIED
             keyboard = [[InlineKeyboardButton("✅ Confirm", callback_data="confirm_event_create"),
                          InlineKeyboardButton("❌ Cancel", callback_data="cancel_event_create")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -310,7 +311,7 @@ async def _handle_calendar_delete(update: Update, context: ContextTypes.DEFAULT_
 
         confirm_text = f"Delete this event?\n\n<b>{event_summary}</b>\n({time_confirm})"
         pending_deletion_data = {'event_id': event_id, 'summary': event_summary}
-        if add_pending_deletion(user_id, pending_deletion_data):
+        if await add_pending_deletion(user_id, pending_deletion_data): # MODIFIED
             keyboard = [[InlineKeyboardButton("✅ Yes, Delete", callback_data="confirm_event_delete"),
                          InlineKeyboardButton("❌ No, Cancel", callback_data="cancel_event_delete")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -396,7 +397,7 @@ async def request_calendar_access_command(update: Update, context: ContextTypes.
     time_period_str = " ".join(context.args)
 
     # 1. Check if requester is connected to Google Calendar
-    if not gs.is_user_connected(requester_id):
+    if not await gs.is_user_connected(requester_id): # MODIFIED
         await update.message.reply_text("You need to connect your Google Calendar first. Use /connect_calendar.")
         return
 
@@ -535,7 +536,7 @@ async def users_shared_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     logger.info(f"User {requester_id} selected target user {target_user_id} ({target_user_first_name}) for period '{original_period_str}'")
 
     # Store Access Request in Firestore
-    request_doc_id = gs.add_calendar_access_request(
+    request_doc_id = await gs.add_calendar_access_request( # MODIFIED
         requester_id=requester_id,
         requester_name=requester_name,
         target_user_id=target_user_id,
@@ -557,7 +558,7 @@ async def users_shared_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     )
 
     # Notify Target User
-    target_user_tz_str = gs.get_user_timezone_str(int(target_user_id)) # Fetch target's TZ for display
+    target_user_tz_str = await gs.get_user_timezone_str(int(target_user_id)) # MODIFIED # Fetch target's TZ for display
     start_display_for_target = _format_iso_datetime_for_display(start_iso, target_user_tz_str)
     end_display_for_target = _format_iso_datetime_for_display(end_iso, target_user_tz_str)
     
@@ -601,25 +602,25 @@ async def users_shared_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                   "or if they have blocked the bot. You might need to share the Request ID with them manually.",
              parse_mode=ParseMode.HTML
         )
-        gs.update_calendar_access_request_status(request_doc_id, "error_notifying_target")
+        await gs.update_calendar_access_request_status(request_doc_id, "error_notifying_target") # MODIFIED
 
 
 async def connect_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Starts the Google Calendar OAuth flow."""
     user_id = update.effective_user.id
     logger.info(f"User {user_id} initiated calendar connection.")
-    if gs.is_user_connected(user_id):
-        service = gs._build_calendar_service_client(user_id)
+    if await gs.is_user_connected(user_id): # MODIFIED
+        service = await gs._build_calendar_service_client(user_id) # MODIFIED
         if service:
             await update.message.reply_text("Calendar already connected!"); return
         else:
-            await update.message.reply_text("Issue with stored connection. Reconnecting..."); gs.delete_user_token(
-                user_id)
+            await update.message.reply_text("Issue with stored connection. Reconnecting..."); 
+            await gs.delete_user_token(user_id) # MODIFIED
 
-    flow = gs.get_google_auth_flow()
+    flow = gs.get_google_auth_flow() # This remains synchronous as it doesn't involve I/O
     if not flow: await update.message.reply_text("Error setting up connection."); return
 
-    state = gs.generate_oauth_state(user_id)
+    state = await gs.generate_oauth_state(user_id) # MODIFIED
     if not state: await update.message.reply_text("Error generating secure state."); return
 
     auth_url, _ = flow.authorization_url(access_type='offline', prompt='consent', state=state)
@@ -631,8 +632,8 @@ async def connect_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 async def my_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Checks connection status."""
     user_id = update.effective_user.id
-    if gs.is_user_connected(user_id):
-        service = gs._build_calendar_service_client(user_id)
+    if await gs.is_user_connected(user_id): # MODIFIED
+        service = await gs._build_calendar_service_client(user_id) # MODIFIED
         if service:
             await update.message.reply_text("✅ Calendar connected & credentials valid.")
         else:
@@ -645,10 +646,10 @@ async def my_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def disconnect_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Removes user's stored credentials."""
     user_id = update.effective_user.id
-    deleted = gs.delete_user_token(user_id)
+    deleted = await gs.delete_user_token(user_id) # MODIFIED
     # Clear any pending states associated with the user from Firestore
-    delete_pending_event(user_id)
-    delete_pending_deletion(user_id)
+    await delete_pending_event(user_id) # MODIFIED
+    await delete_pending_deletion(user_id) # MODIFIED
     logger.info(f"Cleared pending event and deletion data for user {user_id} during disconnect.")
     await update.message.reply_text("Calendar connection removed." if deleted else "Calendar wasn't connected.")
 
@@ -657,7 +658,7 @@ async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     """Handles the explicit /summary command."""
     user_id = update.effective_user.id
     logger.info(f"User {user_id} used /summary command. Args: {context.args}")
-    if not gs.is_user_connected(user_id):
+    if not await gs.is_user_connected(user_id): # MODIFIED
         await update.message.reply_text("Please connect calendar first (/connect_calendar).");
         return
     time_period_str = " ".join(context.args) if context.args else "today"
@@ -674,12 +675,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     logger.info(f"Agent Handler: Received message from user {user_id}: '{text[:50]}...'")
 
     # 1. Check connection status
-    if not gs.is_user_connected(user_id):
+    if not await gs.is_user_connected(user_id): # MODIFIED
         await update.message.reply_text("Please connect your Google Calendar first using /connect_calendar.")
         return
 
     # 2. Get user timezone (prompt if needed)
-    user_timezone_str = gs.get_user_timezone_str(user_id)
+    user_timezone_str = await gs.get_user_timezone_str(user_id) # MODIFIED
     if not user_timezone_str:
         # Instead of blocking, maybe default and inform? Or stick to blocking.
         # Let's default to UTC for agent calls if not set, but inform user.
@@ -729,7 +730,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     reply_markup = None
 
     # Check for pending event creation
-    pending_event_data = get_pending_event(user_id)
+    pending_event_data = await get_pending_event(user_id) # MODIFIED
     if pending_event_data:
         logger.info(f"Pending event create found for user {user_id} from Firestore. Formatting confirmation.")
         try:
@@ -741,10 +742,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         except Exception as e:
             logger.error(f"Error formatting create confirmation in handler from Firestore data: {e}", exc_info=True)
             final_message_to_send = f"Error preparing event confirmation: {e}. Please try again."
-            delete_pending_event(user_id) # Clear broken pending data
+            await delete_pending_event(user_id) # MODIFIED # Clear broken pending data
     else:
         # Only check for pending deletion if no pending creation
-        pending_deletion_data = get_pending_deletion(user_id)
+        pending_deletion_data = await get_pending_deletion(user_id) # MODIFIED
         if pending_deletion_data:
             logger.info(f"Pending event delete found for user {user_id} from Firestore. Formatting confirmation.")
             event_id_to_delete = pending_deletion_data.get('event_id')
@@ -798,7 +799,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     # --- Event Creation ---
     if callback_data == "confirm_event_create":
-        event_details = get_pending_event(user_id) # type: ignore
+        event_details = await get_pending_event(user_id) # MODIFIED # type: ignore
         if not event_details:
             await query.edit_message_text("Event details expired or not found.")
             return
@@ -806,17 +807,17 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         success, msg, link = await gs.create_calendar_event(user_id, event_details)
         final_msg = msg + (f"\nView: <a href='{link}'>Event Link</a>" if link else "")
         await query.edit_message_text(final_msg, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
-        delete_pending_event(user_id) # Clear after attempt
-        if not success and "Authentication failed" in msg and not gs.is_user_connected(user_id):
+        await delete_pending_event(user_id) # MODIFIED # Clear after attempt
+        if not success and "Authentication failed" in msg and not await gs.is_user_connected(user_id): # MODIFIED
             logger.info(f"Token potentially cleared for {user_id} during failed create confirmation.")
 
     elif callback_data == "cancel_event_create":
-        delete_pending_event(user_id)
+        await delete_pending_event(user_id) # MODIFIED
         await query.edit_message_text("Event creation cancelled.")
 
     # --- Event Deletion ---
     elif callback_data == "confirm_event_delete":
-        pending_deletion_data = get_pending_deletion(user_id) # type: ignore
+        pending_deletion_data = await get_pending_deletion(user_id) # MODIFIED # type: ignore
         if not pending_deletion_data:
             await query.edit_message_text("Confirmation for deletion expired or not found.")
             return
@@ -825,25 +826,30 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if not event_id:
             logger.error(f"Missing event_id in pending_deletion_data for user {user_id}")
             await query.edit_message_text("Error: Missing event ID for deletion.")
-            delete_pending_deletion(user_id) # type: ignore # Clear broken data
+            await delete_pending_deletion(user_id) # MODIFIED # type: ignore # Clear broken data
             return
         await query.edit_message_text(f"Deleting '{summary}'...")
         success, msg = await gs.delete_calendar_event(user_id, event_id)
         await query.edit_message_text(msg, parse_mode=ParseMode.HTML)
-        delete_pending_deletion(user_id) # type: ignore # Clear after attempt
-        if not success and "Authentication failed" in msg and not gs.is_user_connected(user_id): # type: ignore
+        await delete_pending_deletion(user_id) # MODIFIED # type: ignore # Clear after attempt
+        if not success and "Authentication failed" in msg and not await gs.is_user_connected(user_id): # MODIFIED # type: ignore
             logger.info(f"Token potentially cleared for {user_id} during failed delete confirmation.")
 
     elif callback_data == "cancel_event_delete":
-        delete_pending_deletion(user_id) # type: ignore
+        await delete_pending_deletion(user_id) # MODIFIED # type: ignore
         await query.edit_message_text("Event deletion cancelled.")
 
     # --- Calendar Access Request Handling ---
     elif callback_data.startswith("approve_access_"):
         request_id = callback_data.split("_")[-1]
+        logger.info(f"[REQ_ID: {request_id}] Entered approve_access block at {time.time()}")
+        logger.info(f"[REQ_ID: {request_id}] About to call query.answer() at {time.time()}")
         await query.answer() # Moved to the top
-        logger.info(f"User {user_id} (target) attempts to approve access request {request_id}")
-        request_data = gs.get_calendar_access_request(request_id)
+        logger.info(f"[REQ_ID: {request_id}] query.answer() completed at {time.time()}")
+        
+        logger.info(f"[REQ_ID: {request_id}] Calling gs.get_calendar_access_request at {time.time()}")
+        request_data = await gs.get_calendar_access_request(request_id) # MODIFIED
+        logger.info(f"[REQ_ID: {request_id}] gs.get_calendar_access_request returned at {time.time()}")
 
         if not request_data:
             await query.edit_message_text("This access request was not found or may have expired.")
@@ -858,26 +864,28 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.edit_message_text("Error: This request is not for you.")
             return
 
-        if not gs.is_user_connected(int(target_user_id)):
+        if not await gs.is_user_connected(int(target_user_id)): # MODIFIED
             await query.edit_message_text("You (target user) need to connect your Google Calendar first via /connect_calendar before approving requests.")
-            # Optionally notify requester that target needs to connect
-            # await context.bot.send_message(chat_id=request_data['requester_id'], text=f"User {request_data['requester_name']} needs to connect their calendar before they can approve your request.")
             return
+        
+        logger.info(f"[REQ_ID: {request_id}] Calling gs.update_calendar_access_request_status at {time.time()}")
+        status_updated = await gs.update_calendar_access_request_status(request_id, "approved") # MODIFIED
+        logger.info(f"[REQ_ID: {request_id}] gs.update_calendar_access_request_status returned at {time.time()}")
 
-        if gs.update_calendar_access_request_status(request_id, "approved"):
+        if status_updated:
             requester_id = request_data['requester_id']
             start_time_iso = request_data['start_time_iso']
             end_time_iso = request_data['end_time_iso']
 
-            # Fetch events from target's calendar (user_id is target)
+            logger.info(f"[REQ_ID: {request_id}] Calling gs.get_calendar_events at {time.time()}")
             events = await gs.get_calendar_events(int(target_user_id), start_time_iso, end_time_iso)
+            logger.info(f"[REQ_ID: {request_id}] gs.get_calendar_events returned at {time.time()}")
 
             events_summary_message = f"🗓️ Calendar events for {request_data.get('requester_name', 'them')} " \
                                      f"(from your calendar) for the period:\n"
             
-            # Determine target's timezone for event display to requester
-            target_tz_str = gs.get_user_timezone_str(int(target_user_id))
-            target_tz = pytz.timezone(target_tz_str) if target_tz_str else pytz.utc # Default to UTC
+            target_tz_str = await gs.get_user_timezone_str(int(target_user_id)) # MODIFIED
+            target_tz = pytz.timezone(target_tz_str) if target_tz_str else pytz.utc
 
             if events is None:
                 events_summary_message += "Could not retrieve events. There might have been an API error."
@@ -885,23 +893,26 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 events_summary_message += "No events found in this period."
             else:
                 for event in events:
-                    time_str = _format_event_time(event, target_tz) # Format with target's TZ
+                    time_str = _format_event_time(event, target_tz)
                     events_summary_message += f"\n- *{html.escape(event.get('summary', 'No Title'))}* ({time_str})"
             
             try:
+                logger.info(f"[REQ_ID: {request_id}] About to send message to requester at {time.time()}")
                 await context.bot.send_message(
                     chat_id=requester_id,
                     text=f"🎉 Your calendar access request for {html.escape(request_data.get('target_user_id', 'the user'))} "
                          f"(for period {_format_iso_datetime_for_display(start_time_iso)} to "
                          f"{_format_iso_datetime_for_display(end_time_iso)}) was APPROVED.\n\n"
                          f"{events_summary_message}",
-                    parse_mode=ParseMode.MARKDOWN_V2 # Use MARKDOWN_V2 if using MarkdownV2 characters, else HTML
+                    parse_mode=ParseMode.MARKDOWN_V2 
                 )
+                logger.info(f"[REQ_ID: {request_id}] Message sent to requester at {time.time()}")
             except Exception as e:
-                logger.error(f"Failed to send approved notification to requester {requester_id} for request {request_id}: {e}")
-                # Update request status to indicate error?
+                logger.error(f"[REQ_ID: {request_id}] Failed to send approved notification to requester {requester_id}: {e}")
             
+            logger.info(f"[REQ_ID: {request_id}] About to edit original message at {time.time()}")
             await query.edit_message_text(text="Access request APPROVED. The requester has been notified with the events.")
+            logger.info(f"[REQ_ID: {request_id}] Original message edited at {time.time()}")
         else:
             await query.edit_message_text("Failed to update request status. Please try again.")
 
@@ -909,7 +920,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         request_id = callback_data.split("_")[-1]
         await query.answer() # Moved to the top
         logger.info(f"User {user_id} (target) attempts to deny access request {request_id}")
-        request_data = gs.get_calendar_access_request(request_id)
+        request_data = await gs.get_calendar_access_request(request_id) # MODIFIED
 
         if not request_data:
             await query.edit_message_text("This access request was not found or may have expired.")
@@ -924,7 +935,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.edit_message_text("Error: This request is not for you.")
             return
 
-        if gs.update_calendar_access_request_status(request_id, "denied"):
+        if await gs.update_calendar_access_request_status(request_id, "denied"): # MODIFIED
             requester_id = request_data['requester_id']
             try:
                 await context.bot.send_message(
@@ -970,7 +981,7 @@ async def set_timezone_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
     """Starts the /set_timezone conversation."""
     user_id = update.effective_user.id
     logger.info(f"User {user_id} started /set_timezone.")
-    current_tz = gs.get_user_timezone_str(user_id)
+    current_tz = await gs.get_user_timezone_str(user_id) # MODIFIED
     prompt = "Please tell me your timezone in IANA format (e.g., 'America/New_York', 'Europe/London', 'Asia/Tokyo').\n"
     prompt += "You can find a list here: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones\n\n"
     if current_tz:
@@ -994,7 +1005,7 @@ async def received_timezone(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         # Validate using pytz
         pytz.timezone(timezone_str)
         # Save using google_services function
-        success = gs.set_user_timezone(user_id, timezone_str)
+        success = await gs.set_user_timezone(user_id, timezone_str) # MODIFIED
         if success:
             await update.message.reply_text(f"✅ Timezone set to `{timezone_str}` successfully!",
                                             parse_mode=ParseMode.MARKDOWN)
@@ -1044,7 +1055,7 @@ async def glist_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     items_to_add = list(context.args) # context.args is a tuple
 
-    if gs.add_to_grocery_list(user_id, items_to_add):
+    if await gs.add_to_grocery_list(user_id, items_to_add): # MODIFIED
         logger.info(f"Successfully added {len(items_to_add)} items for user {user_id}.")
         await update.message.reply_text(
             f"Added: {', '.join(items_to_add)} to your grocery list."
@@ -1061,7 +1072,7 @@ async def glist_show(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     user_id = update.effective_user.id
     logger.info(f"User {user_id} requesting to show grocery list.")
 
-    grocery_list = gs.get_grocery_list(user_id)
+    grocery_list = await gs.get_grocery_list(user_id) # MODIFIED
 
     if grocery_list is None:
         logger.error(f"Failed to retrieve grocery list for user {user_id} (gs returned None).")
@@ -1087,7 +1098,7 @@ async def glist_clear(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     user_id = update.effective_user.id
     logger.info(f"User {user_id} requesting to clear grocery list.")
 
-    if gs.delete_grocery_list(user_id):
+    if await gs.delete_grocery_list(user_id): # MODIFIED
         logger.info(f"Successfully cleared grocery list for user {user_id}.")
         await update.message.reply_text("🗑️ Your grocery list has been cleared.")
     else:
