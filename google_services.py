@@ -18,11 +18,12 @@ from google.auth.transport.requests import Request
 
 # Firestore specific imports
 from google.cloud import firestore
-from google.cloud.firestore_v1.base_query import FieldFilter # May not be strictly needed for these functions
+from google.cloud.firestore_v1.base_query import FieldFilter
 from google.api_core.exceptions import NotFound
 from pytz.exceptions import UnknownTimeZoneError
 
 import config # Import our config
+from models import CalendarAccessRequest # Import the Pydantic model
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,7 @@ USER_PREFS_COLLECTION = db.collection(config.FS_COLLECTION_PREFS) if db else Non
 FS_COLLECTION_GROCERY_LISTS = db.collection(config.FS_COLLECTION_GROCERY_LISTS) if db else None
 PENDING_EVENTS_COLLECTION = db.collection(config.FS_COLLECTION_PENDING_EVENTS) if db else None
 PENDING_DELETIONS_COLLECTION = db.collection(config.FS_COLLECTION_PENDING_DELETIONS) if db else None
+CALENDAR_ACCESS_REQUESTS_COLLECTION = db.collection(config.FS_COLLECTION_CALENDAR_ACCESS_REQUESTS) if db else None
 
 
 # === Pending Event Management (Firestore) ===
@@ -152,7 +154,7 @@ def delete_pending_deletion(user_id: int) -> bool:
 async def get_calendar_event_by_id(user_id: int, event_id: str) -> dict | None:
     """Fetches a single calendar event by its ID."""
     service = _build_calendar_service_client(user_id)
-    if not service: return None
+    if not service: return None # type: ignore
     logger.info(f"GS: Fetching event details for ID {event_id} for user {user_id}")
     try:
         event = service.events().get(calendarId='primary', eventId=event_id).execute()
@@ -169,22 +171,29 @@ async def get_calendar_event_by_id(user_id: int, event_id: str) -> dict | None:
 
 # --- Timezone Functions (Using NEW Collection) ---
 def set_user_timezone(user_id: int, timezone_str: str) -> bool:
-    """Stores the user's validated IANA timezone string in Firestore."""
-    # ---> Use USER_PREFS_COLLECTION <---
+    """
+    Stores the user's validated IANA timezone string in Firestore.
+    """
     if not USER_PREFS_COLLECTION:
         logger.error("Firestore USER_PREFS_COLLECTION unavailable for setting timezone.")
         return False
-    user_doc_id = str(user_id) # Use user_id as document ID
+    user_doc_id = str(user_id)
     doc_ref = USER_PREFS_COLLECTION.document(user_doc_id)
     try:
         # Validate timezone before storing
         pytz.timezone(timezone_str)
-        # Store/Overwrite the timezone preference in the user's preference doc
-        # Using set() without merge is fine here if this doc only holds preferences
-        doc_ref.set({
+
+        data_to_set = {
             'timezone': timezone_str,
-            'updated_at': firestore.SERVER_TIMESTAMP # Track last update
-        })
+            'updated_at': firestore.SERVER_TIMESTAMP
+        }
+        logger.info(f"Preparing to store timezone '{timezone_str}' for user {user_id}")
+
+        # Using set with merge=True to avoid overwriting other potential preferences
+        # (like a previously stored username, though we are removing that functionality)
+        # and to create the document if it doesn't exist.
+        doc_ref.set(data_to_set, merge=True)
+
         logger.info(f"Stored timezone '{timezone_str}' for user {user_id} in '{config.FS_COLLECTION_PREFS}'")
         return True
     except UnknownTimeZoneError:
@@ -233,7 +242,7 @@ async def get_calendar_events(user_id: int, time_min_iso: str, time_max_iso: str
     Returns list of event dicts or None on error.
     """
     service = _build_calendar_service_client(user_id)
-    if not service: return None
+    if not service: return None # type: ignore
     logger.debug(f"GS: Fetching events for {user_id} from {time_min_iso} to {time_max_iso}")
     try:
         events_result = service.events().list(
@@ -266,7 +275,7 @@ async def search_calendar_events(user_id: int, query: str, time_min_iso: str, ti
     Returns list of essential event info dicts or None on error.
     """
     service = _build_calendar_service_client(user_id)
-    if not service: return None
+    if not service: return None # type: ignore
     logger.info(f"GS: Searching events for {user_id} with query '{query}' from {time_min_iso} to {time_max_iso}")
     try:
         events_result = service.events().list(
@@ -469,6 +478,7 @@ def _build_calendar_service_client(user_id: int):
 async def create_calendar_event(user_id: int, event_data: dict) -> tuple[bool, str, str | None]:
     """Creates an event. Returns (success, message, event_link)."""
     service = _build_calendar_service_client(user_id)
+    service = _build_calendar_service_client(user_id) # type: ignore
     if not service: return False, "Authentication failed or required.", None
 
     logger.info(f"Attempting to create event for user {user_id}: {event_data.get('summary')}")
@@ -491,7 +501,7 @@ async def create_calendar_event(user_id: int, event_data: dict) -> tuple[bool, s
 
 async def delete_calendar_event(user_id: int, event_id: str) -> tuple[bool, str]:
     """Deletes a specific event. Returns (success, message)."""
-    service = _build_calendar_service_client(user_id)
+    service = _build_calendar_service_client(user_id) # type: ignore
     if not service: return False, "Authentication failed or required."
 
     logger.info(f"Attempting to delete event ID {event_id} for user {user_id}")
@@ -576,4 +586,98 @@ def delete_grocery_list(user_id: int) -> bool:
         return True
     except Exception as e:
         logger.error(f"GS: Error deleting grocery list for user {user_id}: {e}", exc_info=True)
+        return False
+
+# === Calendar Access Requests ===
+
+def add_calendar_access_request(
+    requester_id: str,
+    requester_name: str,
+    target_user_id: str,
+    start_time_iso: str,
+    end_time_iso: str
+) -> str | None:
+    """
+    Creates a new calendar access request document in Firestore.
+    Returns the ID of the newly created request document, or None if creation fails.
+    """
+    if not CALENDAR_ACCESS_REQUESTS_COLLECTION:
+        logger.error("Firestore CALENDAR_ACCESS_REQUESTS_COLLECTION unavailable.")
+        return None
+
+    try:
+        # Create a CalendarAccessRequest Pydantic model instance first for validation (optional)
+        # This helps ensure data consistency if you have complex validation rules in the model.
+        # However, for direct Firestore storage, a dictionary is also fine.
+        request_data = CalendarAccessRequest(
+            requester_id=requester_id,
+            requester_name=requester_name,
+            target_user_id=target_user_id,
+            start_time_iso=start_time_iso,
+            end_time_iso=end_time_iso,
+            status="pending",
+            # request_timestamp will be set by Firestore using SERVER_TIMESTAMP
+        )
+
+        # Prepare data for Firestore, excluding fields that should not be set client-side initially
+        # (like response_timestamp or if request_timestamp was purely server-side)
+        # The Pydantic model by default includes all fields.
+        # We need to ensure `request_timestamp` is set to the server value.
+        data_to_store = request_data.model_dump(exclude_none=True)
+        data_to_store['request_timestamp'] = firestore.SERVER_TIMESTAMP
+        # response_timestamp is not set on creation
+
+        # Add a new document with an auto-generated ID
+        doc_ref = CALENDAR_ACCESS_REQUESTS_COLLECTION.document()
+        doc_ref.set(data_to_store)
+
+        logger.info(f"Calendar access request from {requester_id} to {target_user_id} stored with ID: {doc_ref.id}")
+        return doc_ref.id
+    except Exception as e:
+        logger.error(f"Failed to add calendar access request from {requester_id} to {target_user_id}: {e}", exc_info=True)
+        return None
+
+def get_calendar_access_request(request_id: str) -> dict | None:
+    """
+    Retrieves a specific calendar access request document from Firestore.
+    """
+    if not CALENDAR_ACCESS_REQUESTS_COLLECTION:
+        logger.error("Firestore CALENDAR_ACCESS_REQUESTS_COLLECTION unavailable for get_calendar_access_request.")
+        return None
+    try:
+        doc_ref = CALENDAR_ACCESS_REQUESTS_COLLECTION.document(request_id)
+        snapshot = doc_ref.get()
+        if snapshot.exists:
+            request_data = snapshot.to_dict()
+            logger.info(f"Retrieved calendar access request with ID: {request_id}")
+            return request_data
+        else:
+            logger.warning(f"Calendar access request with ID: {request_id} not found.")
+            return None
+    except Exception as e:
+        logger.error(f"Error fetching calendar access request {request_id}: {e}", exc_info=True)
+        return None
+
+def update_calendar_access_request_status(request_id: str, status: str) -> bool:
+    """
+    Updates the status and response_timestamp of a calendar access request in Firestore.
+    Valid statuses could be "approved", "denied", "expired", "error".
+    """
+    if not CALENDAR_ACCESS_REQUESTS_COLLECTION:
+        logger.error("Firestore CALENDAR_ACCESS_REQUESTS_COLLECTION unavailable for update_calendar_access_request_status.")
+        return False
+    try:
+        doc_ref = CALENDAR_ACCESS_REQUESTS_COLLECTION.document(request_id)
+        update_data = {
+            'status': status,
+            'response_timestamp': firestore.SERVER_TIMESTAMP
+        }
+        doc_ref.update(update_data)
+        logger.info(f"Updated calendar access request {request_id} to status '{status}'.")
+        return True
+    except NotFound:
+        logger.warning(f"Calendar access request {request_id} not found during status update.")
+        return False
+    except Exception as e:
+        logger.error(f"Failed to update status for calendar access request {request_id}: {e}", exc_info=True)
         return False

@@ -383,3 +383,44 @@ async def test_button_callback_cancel_create(mock_update, mock_context, mocker):
 # test_button_callback_confirm_delete_success
 # test_button_callback_confirm_delete_expired
 # test_button_callback_cancel_delete
+
+
+# --- Tests for _format_iso_datetime_for_display ---
+
+def test_format_iso_datetime_no_tz():
+    iso_string = "2024-07-30T10:00:00Z" # UTC
+    expected_utc = "2024-07-30 10:00 AM UTC"
+    # Depending on local system's interpretation of Z, this might vary without explicit tz handling.
+    # The function should ideally make it explicit.
+    # If the function assumes Z is UTC and formats with UTC:
+    assert handlers._format_iso_datetime_for_display(iso_string) == expected_utc
+    
+    iso_string_no_tz = "2024-07-30T10:00:00" # Naive
+    # Expected behavior for naive might be to assume UTC or local, let's assume it notes it.
+    expected_naive_assumed_utc = "2024-07-30 10:00 AM (Timezone not specified, assumed UTC)"
+    assert handlers._format_iso_datetime_for_display(iso_string_no_tz) == expected_naive_assumed_utc
+
+def test_format_iso_datetime_with_target_tz():
+    iso_string = "2024-07-30T10:00:00Z" # UTC
+    target_tz_str = "America/New_York" # EDT is UTC-4
+    # Expected: 10:00 UTC is 06:00 AM New York time on July 30th
+    expected_ny = "2024-07-30 06:00 AM EDT" 
+    assert handlers._format_iso_datetime_for_display(iso_string, target_tz_str) == expected_ny
+
+    iso_string_offset = "2024-07-30T12:00:00+02:00" # CEST
+    target_tz_str_london = "Europe/London" # BST is UTC+1
+    # Expected: 12:00 CEST (UTC+2) is 11:00 AM London time (BST = UTC+1)
+    expected_london = "2024-07-30 11:00 AM BST"
+    assert handlers._format_iso_datetime_for_display(iso_string_offset, target_tz_str_london) == expected_london
+
+def test_format_iso_datetime_with_unknown_target_tz():
+    iso_string = "2024-07-30T10:00:00Z"
+    target_tz_str = "Mars/Olympus_Mons"
+    # Should fall back to UTC display
+    expected_utc_fallback = "2024-07-30 10:00 AM UTC"
+    assert handlers._format_iso_datetime_for_display(iso_string, target_tz_str) == expected_utc_fallback
+
+def test_format_iso_datetime_invalid_iso_string():
+    iso_string = "This is not a date"
+    # Should return the original string or handle error gracefully
+    assert handlers._format_iso_datetime_for_display(iso_string) == iso_string
