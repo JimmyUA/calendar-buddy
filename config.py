@@ -64,9 +64,10 @@ FS_COLLECTION_PREFS = 'user_preferences' # <--- New collection name
 FS_COLLECTION_GROCERY_LISTS = 'user_grocery_lists'
 FS_COLLECTION_PENDING_EVENTS = 'pending_events'
 FS_COLLECTION_PENDING_DELETIONS = 'pending_deletions'
+FS_COLLECTION_CALENDAR_ACCESS_REQUESTS = 'calendar_access_requests'
 
 MAX_HISTORY_TURNS = 8 # Number of turns to keep in memory for conversation context
 MAX_HISTORY_MESSAGES = 8 # Number of turns to keep in memory for conversation context
-print(f"Config loaded. Using Firestore collections: {FS_COLLECTION_TOKENS}, {FS_COLLECTION_STATES}, {FS_COLLECTION_PREFS}, {FS_COLLECTION_GROCERY_LISTS}, {FS_COLLECTION_PENDING_EVENTS}, {FS_COLLECTION_PENDING_DELETIONS}")
+print(f"Config loaded. Using Firestore collections: {FS_COLLECTION_TOKENS}, {FS_COLLECTION_STATES}, {FS_COLLECTION_PREFS}, {FS_COLLECTION_GROCERY_LISTS}, {FS_COLLECTION_PENDING_EVENTS}, {FS_COLLECTION_PENDING_DELETIONS}, {FS_COLLECTION_CALENDAR_ACCESS_REQUESTS}")
 
 print("Config loaded successfully.")

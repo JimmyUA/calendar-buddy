@@ -96,6 +96,7 @@ def main() -> None:
     application.add_handler(CommandHandler("my_status", handlers.my_status))
     application.add_handler(CommandHandler("disconnect_calendar", handlers.disconnect_calendar))
     application.add_handler(CommandHandler("summary", handlers.summary_command))
+    application.add_handler(CommandHandler("request_access", handlers.request_calendar_access_command)) # New Command
 
     # Grocery List Command Handlers
     application.add_handler(CommandHandler("glist_add", handlers.glist_add))
