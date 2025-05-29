@@ -791,7 +791,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles button presses from inline keyboards."""
     query = update.callback_query
-    await query.answer()
+    # await query.answer() # Moved into specific blocks
     user_id = query.from_user.id
     callback_data = query.data
     logger.info(f"Callback: Received query from user {user_id}: {callback_data}")
@@ -841,6 +841,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # --- Calendar Access Request Handling ---
     elif callback_data.startswith("approve_access_"):
         request_id = callback_data.split("_")[-1]
+        await query.answer() # Moved to the top
         logger.info(f"User {user_id} (target) attempts to approve access request {request_id}")
         request_data = gs.get_calendar_access_request(request_id)
 
@@ -906,6 +907,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     elif callback_data.startswith("deny_access_"):
         request_id = callback_data.split("_")[-1]
+        await query.answer() # Moved to the top
         logger.info(f"User {user_id} (target) attempts to deny access request {request_id}")
         request_data = gs.get_calendar_access_request(request_id)
 
@@ -939,6 +941,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.edit_message_text("Failed to update request status. Please try again.")
             
     else:
+        await query.answer() # Ensure it's called early for unhandled
         logger.warning(f"Callback: Unhandled callback data: {callback_data}")
         try:
             await query.edit_message_text("Action not understood or expired.")
