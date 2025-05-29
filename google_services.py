@@ -1,4 +1,5 @@
 # google_services.py
+import asyncio
 import logging
 import json
 import os
@@ -40,7 +41,7 @@ CALENDAR_ACCESS_REQUESTS_COLLECTION = db.collection(config.FS_COLLECTION_CALENDA
 
 # === Pending Event Management (Firestore) ===
 
-def add_pending_event(user_id: int, event_data: dict) -> bool:
+async def add_pending_event(user_id: int, event_data: dict) -> bool:
     """Stores event_data in Firestore for later confirmation."""
     if not PENDING_EVENTS_COLLECTION:
         logger.error("Firestore PENDING_EVENTS_COLLECTION unavailable for adding pending event.")
@@ -48,17 +49,20 @@ def add_pending_event(user_id: int, event_data: dict) -> bool:
     user_doc_id = str(user_id)
     doc_ref = PENDING_EVENTS_COLLECTION.document(user_doc_id)
     try:
-        doc_ref.set({
-            'event_data': event_data,
-            'created_at': firestore.SERVER_TIMESTAMP
-        })
+        await asyncio.to_thread(
+            doc_ref.set,
+            {
+                'event_data': event_data,
+                'created_at': firestore.SERVER_TIMESTAMP
+            }
+        )
         logger.info(f"Stored pending event for user {user_id} in '{config.FS_COLLECTION_PENDING_EVENTS}'")
         return True
     except Exception as e:
         logger.error(f"Failed to store pending event for user {user_id}: {e}", exc_info=True)
         return False
 
-def get_pending_event(user_id: int) -> dict | None:
+async def get_pending_event(user_id: int) -> dict | None:
     """Retrieves pending event data for a user from Firestore."""
     if not PENDING_EVENTS_COLLECTION:
         logger.error("Firestore PENDING_EVENTS_COLLECTION unavailable for getting pending event.")
@@ -66,9 +70,9 @@ def get_pending_event(user_id: int) -> dict | None:
     user_doc_id = str(user_id)
     doc_ref = PENDING_EVENTS_COLLECTION.document(user_doc_id)
     try:
-        snapshot = doc_ref.get()
+        snapshot = await asyncio.to_thread(doc_ref.get)
         if snapshot.exists:
-            data = snapshot.to_dict()
+            data = snapshot.to_dict() # type: ignore
             logger.debug(f"Retrieved pending event for user {user_id}.")
             return data.get('event_data') # Return only the event_data part
         else:
@@ -78,7 +82,7 @@ def get_pending_event(user_id: int) -> dict | None:
         logger.error(f"Error fetching pending event for user {user_id}: {e}", exc_info=True)
         return None
 
-def delete_pending_event(user_id: int) -> bool:
+async def delete_pending_event(user_id: int) -> bool:
     """Deletes a pending event document for a user from Firestore."""
     if not PENDING_EVENTS_COLLECTION:
         logger.error("Firestore PENDING_EVENTS_COLLECTION unavailable for deleting pending event.")
@@ -86,7 +90,7 @@ def delete_pending_event(user_id: int) -> bool:
     user_doc_id = str(user_id)
     doc_ref = PENDING_EVENTS_COLLECTION.document(user_doc_id)
     try:
-        doc_ref.delete()
+        await asyncio.to_thread(doc_ref.delete)
         logger.info(f"Deleted pending event for user {user_id} (if it existed).")
         return True # Success even if doc didn't exist, as per Firestore behavior
     except Exception as e:
@@ -95,7 +99,7 @@ def delete_pending_event(user_id: int) -> bool:
 
 # === Pending Deletion Management (Firestore) ===
 
-def add_pending_deletion(user_id: int, deletion_data: dict) -> bool:
+async def add_pending_deletion(user_id: int, deletion_data: dict) -> bool:
     """Stores deletion_data (e.g., event_id, summary) in Firestore for later confirmation."""
     if not PENDING_DELETIONS_COLLECTION:
         logger.error("Firestore PENDING_DELETIONS_COLLECTION unavailable for adding pending deletion.")
@@ -104,17 +108,20 @@ def add_pending_deletion(user_id: int, deletion_data: dict) -> bool:
     doc_ref = PENDING_DELETIONS_COLLECTION.document(user_doc_id)
     try:
         # Store the provided deletion_data directly, ensure it includes event_id and summary
-        doc_ref.set({
-            'deletion_data': deletion_data, # e.g., {'event_id': 'xyz', 'summary': 'Event to delete'}
-            'created_at': firestore.SERVER_TIMESTAMP
-        })
+        await asyncio.to_thread(
+            doc_ref.set,
+            {
+                'deletion_data': deletion_data, # e.g., {'event_id': 'xyz', 'summary': 'Event to delete'}
+                'created_at': firestore.SERVER_TIMESTAMP
+            }
+        )
         logger.info(f"Stored pending deletion for user {user_id} in '{config.FS_COLLECTION_PENDING_DELETIONS}'")
         return True
     except Exception as e:
         logger.error(f"Failed to store pending deletion for user {user_id}: {e}", exc_info=True)
         return False
 
-def get_pending_deletion(user_id: int) -> dict | None:
+async def get_pending_deletion(user_id: int) -> dict | None:
     """Retrieves pending deletion data for a user from Firestore."""
     if not PENDING_DELETIONS_COLLECTION:
         logger.error("Firestore PENDING_DELETIONS_COLLECTION unavailable for getting pending deletion.")
@@ -122,9 +129,9 @@ def get_pending_deletion(user_id: int) -> dict | None:
     user_doc_id = str(user_id)
     doc_ref = PENDING_DELETIONS_COLLECTION.document(user_doc_id)
     try:
-        snapshot = doc_ref.get()
+        snapshot = await asyncio.to_thread(doc_ref.get)
         if snapshot.exists:
-            data = snapshot.to_dict()
+            data = snapshot.to_dict() # type: ignore
             logger.debug(f"Retrieved pending deletion for user {user_id}.")
             return data.get('deletion_data') # Return only the deletion_data part
         else:
@@ -134,7 +141,7 @@ def get_pending_deletion(user_id: int) -> dict | None:
         logger.error(f"Error fetching pending deletion for user {user_id}: {e}", exc_info=True)
         return None
 
-def delete_pending_deletion(user_id: int) -> bool:
+async def delete_pending_deletion(user_id: int) -> bool:
     """Deletes a pending deletion document for a user from Firestore."""
     if not PENDING_DELETIONS_COLLECTION:
         logger.error("Firestore PENDING_DELETIONS_COLLECTION unavailable for deleting pending deletion.")
@@ -142,7 +149,7 @@ def delete_pending_deletion(user_id: int) -> bool:
     user_doc_id = str(user_id)
     doc_ref = PENDING_DELETIONS_COLLECTION.document(user_doc_id)
     try:
-        doc_ref.delete()
+        await asyncio.to_thread(doc_ref.delete)
         logger.info(f"Deleted pending deletion for user {user_id} (if it existed).")
         return True # Success even if doc didn't exist
     except Exception as e:
@@ -153,24 +160,26 @@ def delete_pending_deletion(user_id: int) -> bool:
 # --- NEW: Get Single Event by ID ---
 async def get_calendar_event_by_id(user_id: int, event_id: str) -> dict | None:
     """Fetches a single calendar event by its ID."""
-    service = _build_calendar_service_client(user_id)
-    if not service: return None # type: ignore
+    service = await _build_calendar_service_client(user_id) # type: ignore
+    if not service: return None
     logger.info(f"GS: Fetching event details for ID {event_id} for user {user_id}")
     try:
-        event = service.events().get(calendarId='primary', eventId=event_id).execute()
+        # Wrap the blocking .execute() call
+        event_request = service.events().get(calendarId='primary', eventId=event_id)
+        event = await asyncio.to_thread(event_request.execute)
         return event # Returns the full event resource
     except HttpError as error:
         logger.error(f"GS: API error fetching event {event_id} for {user_id}: {error}")
         if error.resp.status == 404 or error.resp.status == 410: # Not Found or Gone
              logger.warning(f"GS: Event {event_id} not found for user {user_id}.")
-        elif error.resp.status == 401: delete_user_token(user_id) # Clear token on auth error
+        elif error.resp.status == 401: await delete_user_token(user_id) # Clear token on auth error
         return None
     except Exception as e:
         logger.error(f"GS: Unexpected error fetching event {event_id} for {user_id}: {e}", exc_info=True)
         return None
 
 # --- Timezone Functions (Using NEW Collection) ---
-def set_user_timezone(user_id: int, timezone_str: str) -> bool:
+async def set_user_timezone(user_id: int, timezone_str: str) -> bool:
     """
     Stores the user's validated IANA timezone string in Firestore.
     """
@@ -180,7 +189,7 @@ def set_user_timezone(user_id: int, timezone_str: str) -> bool:
     user_doc_id = str(user_id)
     doc_ref = USER_PREFS_COLLECTION.document(user_doc_id)
     try:
-        # Validate timezone before storing
+        # Validate timezone before storing (pytz.timezone is CPU-bound, not I/O)
         pytz.timezone(timezone_str)
 
         data_to_set = {
@@ -189,10 +198,7 @@ def set_user_timezone(user_id: int, timezone_str: str) -> bool:
         }
         logger.info(f"Preparing to store timezone '{timezone_str}' for user {user_id}")
 
-        # Using set with merge=True to avoid overwriting other potential preferences
-        # (like a previously stored username, though we are removing that functionality)
-        # and to create the document if it doesn't exist.
-        doc_ref.set(data_to_set, merge=True)
+        await asyncio.to_thread(doc_ref.set, data_to_set, merge=True)
 
         logger.info(f"Stored timezone '{timezone_str}' for user {user_id} in '{config.FS_COLLECTION_PREFS}'")
         return True
@@ -203,57 +209,7 @@ def set_user_timezone(user_id: int, timezone_str: str) -> bool:
         logger.error(f"Failed to store timezone/username for user {user_id}: {e}", exc_info=True)
         return False
 
-def get_user_id_by_username(username: str) -> str | None:
-    """
-    Queries USER_PREFS_COLLECTION for a document with a matching telegram_username.
-    Returns the document ID (user_id) if found, otherwise None.
-    Performs a case-insensitive search by querying for both original, lower, and upper case.
-    Note: Firestore is case-sensitive for direct queries. For true case-insensitivity
-    without multiple queries or storing a normalized field, client-side filtering or
-    a more complex setup (e.g., search service) would be needed.
-    This implementation tries a few common casings. A more robust solution is to store
-    a normalized (e.g., lowercase) version of the username.
-    """
-    if not USER_PREFS_COLLECTION:
-        logger.error("Firestore USER_PREFS_COLLECTION unavailable for get_user_id_by_username.")
-        return None
-
-    # Attempt common casings. For true case-insensitivity, store a normalized username.
-    # usernames_to_check = list(set([username, username.lower(), username.capitalize()]))
-    # For now, we assume the username is stored as is, and we will query for that.
-    # A better solution is to store username.lower() and query for username.lower().
-    # We will assume for now that the username is stored as it's passed.
-
-    try:
-        # Query for the exact username match first (common case)
-        query = USER_PREFS_COLLECTION.where(filter=FieldFilter("telegram_username", "==", username)).limit(1)
-        results = list(query.stream())
-
-        if results:
-            user_doc = results[0]
-            logger.info(f"Found user ID '{user_doc.id}' for username '{username}' (exact match).")
-            return user_doc.id # Document ID is the user_id
-
-        # If no exact match, try lowercase (if different from original)
-        # This is a common way to handle case-insensitivity if not storing a normalized field
-        # However, this requires the stored username to also be lowercase for this to work reliably.
-        # Given the current set_user_timezone, it stores the username as is.
-        # So, for now, we will only do an exact match.
-        # if username.lower() != username:
-        #     query_lower = USER_PREFS_COLLECTION.where(filter=FieldFilter("telegram_username", "==", username.lower())).limit(1)
-        #     results_lower = list(query_lower.stream())
-        #     if results_lower:
-        #         user_doc_lower = results_lower[0]
-        #         logger.info(f"Found user ID '{user_doc_lower.id}' for username '{username}' (lowercase match).")
-        #         return user_doc_lower.id
-
-        logger.info(f"No user found with username '{username}' in '{config.FS_COLLECTION_PREFS}'.")
-        return None
-    except Exception as e:
-        logger.error(f"Error querying for user by username '{username}': {e}", exc_info=True)
-        return None
-
-def get_user_timezone_str(user_id: int) -> str | None:
+async def get_user_timezone_str(user_id: int) -> str | None:
     """Retrieves the user's timezone string from Firestore."""
     # ---> Use USER_PREFS_COLLECTION <---
     if not USER_PREFS_COLLECTION:
@@ -262,10 +218,10 @@ def get_user_timezone_str(user_id: int) -> str | None:
     user_doc_id = str(user_id)
     doc_ref = USER_PREFS_COLLECTION.document(user_doc_id)
     try:
-        snapshot = doc_ref.get() # Fetch the preferences document
+        snapshot = await asyncio.to_thread(doc_ref.get) # Fetch the preferences document
 
         if snapshot.exists:
-            prefs_data = snapshot.to_dict()
+            prefs_data = snapshot.to_dict() # type: ignore
             if 'timezone' in prefs_data: # Check if the field exists
                 tz_str = prefs_data.get('timezone')
                 # Optional re-validation
@@ -291,14 +247,15 @@ async def get_calendar_events(user_id: int, time_min_iso: str, time_max_iso: str
     Fetches events given ISO datetime strings.
     Returns list of event dicts or None on error.
     """
-    service = _build_calendar_service_client(user_id)
-    if not service: return None # type: ignore
+    service = await _build_calendar_service_client(user_id) # type: ignore
+    if not service: return None
     logger.debug(f"GS: Fetching events for {user_id} from {time_min_iso} to {time_max_iso}")
     try:
-        events_result = service.events().list(
+        events_request = service.events().list(
             calendarId='primary', timeMin=time_min_iso, timeMax=time_max_iso,
             maxResults=max_results, singleEvents=True, orderBy='startTime'
-        ).execute()
+        )
+        events_result = await asyncio.to_thread(events_request.execute)
         events = events_result.get('items', [])
         # Return essential info for the agent
         return [
@@ -314,7 +271,7 @@ async def get_calendar_events(user_id: int, time_min_iso: str, time_max_iso: str
     except HttpError as error:
         # ... (error handling as before, including delete_user_token on 401) ...
         logger.error(f"GS: API error fetching events for {user_id}: {error}")
-        if error.resp.status == 401: delete_user_token(user_id)
+        if error.resp.status == 401: await delete_user_token(user_id)
         return None
     except Exception as e: logger.error(f"GS: Unexpected error fetching events for {user_id}: {e}", exc_info=True); return None
 
@@ -324,11 +281,11 @@ async def search_calendar_events(user_id: int, query: str, time_min_iso: str, ti
     Searches events using a query string within a time range.
     Returns list of essential event info dicts or None on error.
     """
-    service = _build_calendar_service_client(user_id)
-    if not service: return None # type: ignore
+    service = await _build_calendar_service_client(user_id) # type: ignore
+    if not service: return None
     logger.info(f"GS: Searching events for {user_id} with query '{query}' from {time_min_iso} to {time_max_iso}")
     try:
-        events_result = service.events().list(
+        events_request = service.events().list(
             calendarId='primary',
             q=query, # Use the q parameter for searching
             timeMin=time_min_iso,
@@ -336,7 +293,8 @@ async def search_calendar_events(user_id: int, query: str, time_min_iso: str, ti
             maxResults=max_results,
             singleEvents=True,
             orderBy='startTime' # Or 'relevance' if preferred for search
-        ).execute()
+        )
+        events_result = await asyncio.to_thread(events_request.execute)
         events = events_result.get('items', [])
         logger.info(f"GS: Found {len(events)} events matching search.")
         # Return essential info
@@ -351,7 +309,7 @@ async def search_calendar_events(user_id: int, query: str, time_min_iso: str, ti
     except HttpError as error:
         # ... (error handling as before) ...
         logger.error(f"GS: API error searching events for {user_id}: {error}")
-        if error.resp.status == 401: delete_user_token(user_id)
+        if error.resp.status == 401: await delete_user_token(user_id)
         return None
     except Exception as e: logger.error(f"GS: Unexpected error searching events for {user_id}: {e}", exc_info=True); return None
 
@@ -387,10 +345,12 @@ def generate_oauth_state(user_id: int) -> str | None:
     """Generates a unique state token and stores the mapping in Firestore."""
     if not OAUTH_STATES_COLLECTION: logger.error("Firestore OAUTH_STATES_COLLECTION not available."); return None
     state = str(uuid.uuid4())
-    doc_ref = OAUTH_STATES_COLLECTION.document(state)
+    doc_ref = OAUTH_STATES_COLLECTION.document(state) # type: ignore
     try:
-        write_result = doc_ref.set({'user_id': user_id, 'created_at': firestore.SERVER_TIMESTAMP})
-        logger.info(f"Successfully wrote state {state} for user {user_id} to Firestore. Write time: {write_result.update_time}")
+        # Firestore operations are blocking
+        await asyncio.to_thread(doc_ref.set, {'user_id': user_id, 'created_at': firestore.SERVER_TIMESTAMP})
+        # Note: write_result.update_time is not available when using to_thread this way
+        logger.info(f"Successfully wrote state {state} for user {user_id} to Firestore.")
         return state
     except Exception as e:
         logger.error(f"Firestore write FAILED for state {state}, user {user_id}: {e}", exc_info=True)
@@ -399,10 +359,13 @@ def generate_oauth_state(user_id: int) -> str | None:
 @firestore.transactional
 def _verify_and_delete_state(transaction, state_doc_ref):
     """Transactional helper for verify_oauth_state."""
+    # This function is called by verify_oauth_state, which is synchronous.
+    # If verify_oauth_state becomes async, then this can use asyncio.to_thread.
+    # For now, keeping it synchronous as it's part of a synchronous transaction flow.
     try:
-        snapshot = state_doc_ref.get(transaction=transaction)
+        snapshot = state_doc_ref.get(transaction=transaction) # This is a transactional read
         if snapshot.exists:
-            user_id = snapshot.get('user_id')
+            user_id = snapshot.get('user_id') # type: ignore
             transaction.delete(state_doc_ref)
             return user_id
         else:
@@ -429,41 +392,42 @@ def verify_oauth_state(state: str) -> int | None:
         return None
 
 
-def store_user_credentials(user_id: int, credentials) -> bool:
+async def store_user_credentials(user_id: int, credentials) -> bool:
     """Stores or updates the user's Google credentials JSON in Firestore."""
     if not USER_TOKENS_COLLECTION: logger.error("Firestore USER_TOKENS_COLLECTION not available."); return False
     creds_json = credentials.to_json()
     user_doc_id = str(user_id)
     doc_ref = USER_TOKENS_COLLECTION.document(user_doc_id)
     try:
-        doc_ref.set({'credentials_json': creds_json, 'updated_at': firestore.SERVER_TIMESTAMP}, merge=False)
+        await asyncio.to_thread(doc_ref.set, {'credentials_json': creds_json, 'updated_at': firestore.SERVER_TIMESTAMP}, merge=False)
         logger.info(f"Stored/Updated credentials in Firestore for user {user_id}")
         return True
     except Exception as e:
         logger.error(f"Failed to store credentials in Firestore for user {user_id}: {e}", exc_info=True)
         return False
 
-def is_user_connected(user_id: int) -> bool:
+async def is_user_connected(user_id: int) -> bool:
     """Checks if a token document exists for the user in Firestore."""
     if not USER_TOKENS_COLLECTION: return False
     user_doc_id = str(user_id)
     doc_ref = USER_TOKENS_COLLECTION.document(user_doc_id)
     try:
         # Efficient check for existence
-        snapshot = doc_ref.get(field_paths=['updated_at'])
+        snapshot = await asyncio.to_thread(doc_ref.get, field_paths=['updated_at'])
         return snapshot.exists
     except Exception as e:
         logger.error(f"Error checking token existence in Firestore for user {user_id}: {e}", exc_info=True)
         return False # Assume not connected on error
 
-def delete_user_token(user_id: int) -> bool:
+async def delete_user_token(user_id: int) -> bool:
     """Deletes the token document for a given user_id from Firestore."""
     if not USER_TOKENS_COLLECTION: return False
     user_doc_id = str(user_id)
     doc_ref = USER_TOKENS_COLLECTION.document(user_doc_id)
     try:
-        delete_result = doc_ref.delete()
-        logger.info(f"Attempted deletion of token from Firestore for user {user_id}. Result time: {delete_result.update_time}")
+        await asyncio.to_thread(doc_ref.delete)
+        # delete_result.update_time not available here
+        logger.info(f"Attempted deletion of token from Firestore for user {user_id}.")
         return True # Assume success unless exception
     except Exception as e:
         logger.error(f"Failed to delete token from Firestore for user {user_id}: {e}", exc_info=True)
@@ -472,7 +436,7 @@ def delete_user_token(user_id: int) -> bool:
 
 # === Google Calendar API Services ===
 
-def _build_calendar_service_client(user_id: int):
+async def _build_calendar_service_client(user_id: int):
     """Internal helper to get authorized Google Calendar service client."""
     if not USER_TOKENS_COLLECTION: logger.error("Firestore unavailable for Calendar service."); return None
 
@@ -482,8 +446,8 @@ def _build_calendar_service_client(user_id: int):
     doc_ref = USER_TOKENS_COLLECTION.document(user_doc_id)
 
     try:
-        snapshot = doc_ref.get()
-        if snapshot.exists: creds_json = snapshot.get('credentials_json')
+        snapshot = await asyncio.to_thread(doc_ref.get)
+        if snapshot.exists: creds_json = snapshot.get('credentials_json') # type: ignore
         else: logger.info(f"_build_calendar_service_client: No creds found for {user_id}."); return None
     except Exception as e: logger.error(f"Error fetching token for Calendar service for {user_id}: {e}"); return None
 
@@ -498,52 +462,60 @@ def _build_calendar_service_client(user_id: int):
         if creds and creds.expired and creds.refresh_token:
             try:
                 logger.info(f"Refreshing Calendar credentials for user {user_id}")
-                creds.refresh(Request())
-                if not store_user_credentials(user_id, creds): # Check if storing failed
+                await asyncio.to_thread(creds.refresh, Request()) # Wrap blocking call
+                if not await store_user_credentials(user_id, creds): # Check if storing failed
                     logger.error(f"Failed to store refreshed credentials for user {user_id}")
-                    # Decide if we should proceed with the temporary creds or fail
-                    return None # Safer to fail if store fails
+                    return None
                 logger.info(f"Calendar Credentials refreshed successfully for {user_id}")
             except Exception as e:
                 logger.error(f"Failed to refresh Calendar credentials for {user_id}: {e}")
-                try: logger.warning(f"Clearing invalid token from Firestore for {user_id} after refresh failure."); doc_ref.delete()
+                try:
+                    logger.warning(f"Clearing invalid token from Firestore for {user_id} after refresh failure.")
+                    await asyncio.to_thread(doc_ref.delete)
                 except Exception as db_e: logger.error(f"Failed to delete token for {user_id}: {db_e}")
                 return None
         else:
             logger.warning(f"Stored Calendar credentials for {user_id} invalid/missing refresh token.");
-            try: doc_ref.delete()
+            try: await asyncio.to_thread(doc_ref.delete)
             except Exception: pass
             return None
 
     try:
+        # build() itself is not I/O bound in a way that benefits from to_thread here for typical use.
+        # It constructs the service object. The actual I/O happens at .execute().
         service = build('calendar', 'v3', credentials=creds, cache_discovery=False)
         return service
     except HttpError as error:
         logger.error(f"API error building Calendar service for {user_id}: {error}")
-        if error.resp.status == 401: logger.warning(f"Auth error (401) building Calendar service for {user_id}. Clearing token."); delete_user_token(user_id)
+        if error.resp.status == 401:
+            logger.warning(f"Auth error (401) building Calendar service for {user_id}. Clearing token.")
+            await delete_user_token(user_id)
         return None
     except Exception as e:
         logger.error(f"Unexpected error building Calendar service for {user_id}: {e}"); return None
 
 async def create_calendar_event(user_id: int, event_data: dict) -> tuple[bool, str, str | None]:
     """Creates an event. Returns (success, message, event_link)."""
-    service = _build_calendar_service_client(user_id)
-    service = _build_calendar_service_client(user_id) # type: ignore
+    service = await _build_calendar_service_client(user_id) # type: ignore
     if not service: return False, "Authentication failed or required.", None
 
     logger.info(f"Attempting to create event for user {user_id}: {event_data.get('summary')}")
     try:
-        event = service.events().insert(calendarId='primary', body=event_data).execute()
-        link = event.get('htmlLink')
-        summary = event.get('summary', 'Event')
+        event_request = service.events().insert(calendarId='primary', body=event_data)
+        event = await asyncio.to_thread(event_request.execute)
+        link = event.get('htmlLink') # type: ignore
+        summary = event.get('summary', 'Event') # type: ignore
         logger.info(f"Event created for {user_id}: {link}")
         return True, f"Event '{summary}' created successfully.", link
     except HttpError as error:
         logger.error(f"API error creating event for {user_id}: {error}")
         error_details = f"API Error ({error.resp.status}): {error.resp.reason}"
-        try: error_content = json.loads(error.content.decode()); error_details = error_content.get('error', {}).get('message', error_details)
+        try: error_content = json.loads(error.content.decode()); error_details = error_content.get('error', {}).get('message', error_details) # type: ignore
         except: pass
-        if error.resp.status == 401: logger.warning(f"Auth error (401) creating event for {user_id}. Clearing token."); delete_user_token(user_id); return False, "Authentication failed. Please /connect_calendar again.", None
+        if error.resp.status == 401:
+            logger.warning(f"Auth error (401) creating event for {user_id}. Clearing token.")
+            await delete_user_token(user_id)
+            return False, "Authentication failed. Please /connect_calendar again.", None
         return False, f"Failed to create event. {error_details}", None
     except Exception as e:
         logger.error(f"Unexpected error creating event for {user_id}: {e}", exc_info=True)
@@ -551,21 +523,25 @@ async def create_calendar_event(user_id: int, event_data: dict) -> tuple[bool, s
 
 async def delete_calendar_event(user_id: int, event_id: str) -> tuple[bool, str]:
     """Deletes a specific event. Returns (success, message)."""
-    service = _build_calendar_service_client(user_id) # type: ignore
+    service = await _build_calendar_service_client(user_id) # type: ignore
     if not service: return False, "Authentication failed or required."
 
     logger.info(f"Attempting to delete event ID {event_id} for user {user_id}")
     try:
-        service.events().delete(calendarId='primary', eventId=event_id).execute()
+        delete_request = service.events().delete(calendarId='primary', eventId=event_id)
+        await asyncio.to_thread(delete_request.execute)
         logger.info(f"Successfully deleted event ID {event_id} for user {user_id}.")
         return True, "Event successfully deleted."
     except HttpError as error:
         logger.error(f"API error deleting event {event_id} for {user_id}: {error}")
         error_details = f"API Error ({error.resp.status}): {error.resp.reason}"
-        try: error_content = json.loads(error.content.decode()); error_details = error_content.get('error', {}).get('message', error_details)
+        try: error_content = json.loads(error.content.decode()); error_details = error_content.get('error', {}).get('message', error_details) # type: ignore
         except: pass
         if error.resp.status == 404 or error.resp.status == 410: return False, "Couldn't delete event (not found or already deleted)."
-        elif error.resp.status == 401: logger.warning(f"Auth error (401) deleting event for {user_id}. Clearing token."); delete_user_token(user_id); return False, "Authentication failed. Please /connect_calendar again."
+        elif error.resp.status == 401:
+            logger.warning(f"Auth error (401) deleting event for {user_id}. Clearing token.")
+            await delete_user_token(user_id)
+            return False, "Authentication failed. Please /connect_calendar again."
         return False, f"Failed to delete event. {error_details}"
     except Exception as e:
         logger.error(f"Unexpected error deleting event {event_id} for {user_id}: {e}", exc_info=True)
@@ -573,7 +549,7 @@ async def delete_calendar_event(user_id: int, event_id: str) -> tuple[bool, str]
 
 # === Grocery List Management ===
 
-def get_grocery_list(user_id: int) -> list[str] | None:
+async def get_grocery_list(user_id: int) -> list[str] | None:
     """Retrieves the user's grocery list from Firestore."""
     if not FS_COLLECTION_GROCERY_LISTS:
         logger.error("GS: Firestore FS_COLLECTION_GROCERY_LISTS unavailable for get_grocery_list.")
@@ -581,10 +557,10 @@ def get_grocery_list(user_id: int) -> list[str] | None:
     user_doc_id = str(user_id)
     doc_ref = FS_COLLECTION_GROCERY_LISTS.document(user_doc_id)
     try:
-        snapshot = doc_ref.get()
+        snapshot = await asyncio.to_thread(doc_ref.get)
         if snapshot.exists:
-            data = snapshot.to_dict()
-            items = data.get('items')
+            data = snapshot.to_dict() # type: ignore
+            items = data.get('items') # type: ignore
             if isinstance(items, list):
                 logger.info(f"GS: Retrieved grocery list for user {user_id} with {len(items)} items.")
                 return items
@@ -598,7 +574,7 @@ def get_grocery_list(user_id: int) -> list[str] | None:
         logger.error(f"GS: Error fetching grocery list for user {user_id}: {e}", exc_info=True)
         return None
 
-def add_to_grocery_list(user_id: int, items_to_add: list[str]) -> bool:
+async def add_to_grocery_list(user_id: int, items_to_add: list[str]) -> bool:
     """Adds items to the user's grocery list in Firestore."""
     if not FS_COLLECTION_GROCERY_LISTS:
         logger.error("GS: Firestore FS_COLLECTION_GROCERY_LISTS unavailable for add_to_grocery_list.")
@@ -611,16 +587,14 @@ def add_to_grocery_list(user_id: int, items_to_add: list[str]) -> bool:
     doc_ref = FS_COLLECTION_GROCERY_LISTS.document(user_doc_id)
     try:
         # Using set with merge=True and ArrayUnion to add/update items
-        # This creates the document if it doesn't exist, or merges into existing.
-        # ArrayUnion ensures items are added only if they are not already present.
-        doc_ref.set({'items': firestore.ArrayUnion(items_to_add)}, merge=True)
+        await asyncio.to_thread(doc_ref.set, {'items': firestore.ArrayUnion(items_to_add)}, merge=True)
         logger.info(f"GS: Added/Updated {len(items_to_add)} items to grocery list for user {user_id}.")
         return True
     except Exception as e:
         logger.error(f"GS: Failed to add items to grocery list for user {user_id}: {e}", exc_info=True)
         return False
 
-def delete_grocery_list(user_id: int) -> bool:
+async def delete_grocery_list(user_id: int) -> bool:
     """Deletes the user's entire grocery list from Firestore."""
     if not FS_COLLECTION_GROCERY_LISTS:
         logger.error("GS: Firestore FS_COLLECTION_GROCERY_LISTS unavailable for delete_grocery_list.")
@@ -629,7 +603,7 @@ def delete_grocery_list(user_id: int) -> bool:
     doc_ref = FS_COLLECTION_GROCERY_LISTS.document(user_doc_id)
     try:
         # delete() does not raise an error if the document does not exist.
-        doc_ref.delete()
+        await asyncio.to_thread(doc_ref.delete)
         logger.info(f"GS: Attempted deletion of grocery list for user {user_id}.")
         # To confirm it was deleted, we could try a get(), but for this function,
         # simply calling delete is often sufficient and idempotent.
@@ -640,7 +614,7 @@ def delete_grocery_list(user_id: int) -> bool:
 
 # === Calendar Access Requests ===
 
-def add_calendar_access_request(
+async def add_calendar_access_request(
     requester_id: str,
     requester_name: str,
     target_user_id: str,
@@ -678,16 +652,16 @@ def add_calendar_access_request(
         # response_timestamp is not set on creation
 
         # Add a new document with an auto-generated ID
-        doc_ref = CALENDAR_ACCESS_REQUESTS_COLLECTION.document()
-        doc_ref.set(data_to_store)
+        doc_ref_new = CALENDAR_ACCESS_REQUESTS_COLLECTION.document() # type: ignore
+        await asyncio.to_thread(doc_ref_new.set, data_to_store)
 
-        logger.info(f"Calendar access request from {requester_id} to {target_user_id} stored with ID: {doc_ref.id}")
-        return doc_ref.id
+        logger.info(f"Calendar access request from {requester_id} to {target_user_id} stored with ID: {doc_ref_new.id}")
+        return doc_ref_new.id
     except Exception as e:
         logger.error(f"Failed to add calendar access request from {requester_id} to {target_user_id}: {e}", exc_info=True)
         return None
 
-def get_calendar_access_request(request_id: str) -> dict | None:
+async def get_calendar_access_request(request_id: str) -> dict | None:
     """
     Retrieves a specific calendar access request document from Firestore.
     """
@@ -696,9 +670,9 @@ def get_calendar_access_request(request_id: str) -> dict | None:
         return None
     try:
         doc_ref = CALENDAR_ACCESS_REQUESTS_COLLECTION.document(request_id)
-        snapshot = doc_ref.get()
+        snapshot = await asyncio.to_thread(doc_ref.get)
         if snapshot.exists:
-            request_data = snapshot.to_dict()
+            request_data = snapshot.to_dict() # type: ignore
             logger.info(f"Retrieved calendar access request with ID: {request_id}")
             return request_data
         else:
@@ -708,7 +682,7 @@ def get_calendar_access_request(request_id: str) -> dict | None:
         logger.error(f"Error fetching calendar access request {request_id}: {e}", exc_info=True)
         return None
 
-def update_calendar_access_request_status(request_id: str, status: str) -> bool:
+async def update_calendar_access_request_status(request_id: str, status: str) -> bool:
     """
     Updates the status and response_timestamp of a calendar access request in Firestore.
     Valid statuses could be "approved", "denied", "expired", "error".
@@ -722,7 +696,7 @@ def update_calendar_access_request_status(request_id: str, status: str) -> bool:
             'status': status,
             'response_timestamp': firestore.SERVER_TIMESTAMP
         }
-        doc_ref.update(update_data)
+        await asyncio.to_thread(doc_ref.update, update_data)
         logger.info(f"Updated calendar access request {request_id} to status '{status}'.")
         return True
     except NotFound:

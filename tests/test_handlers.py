@@ -1,6 +1,6 @@
 # tests/test_handlers.py
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 from telegram import InlineKeyboardMarkup
 from telegram.ext import ConversationHandler
 from telegram.constants import ParseMode
@@ -35,10 +35,8 @@ async def test_help_handler(mock_update, mock_context):
 
 async def test_my_status_connected(mock_update, mock_context, mocker):
     mock_update.set_message_text("/my_status")
-    # Mock gs.is_user_connected to return True
-    mocker.patch('handlers.gs.is_user_connected', return_value=True)
-    # Mock _build_calendar_service_client to simulate valid connection
-    mocker.patch('handlers.gs._build_calendar_service_client', return_value=MagicMock())
+    mocker.patch('handlers.gs.is_user_connected', new_callable=AsyncMock, return_value=True)
+    mocker.patch('handlers.gs._build_calendar_service_client', new_callable=AsyncMock, return_value=MagicMock())
 
     await handlers.my_status(mock_update, mock_context)
 
@@ -49,7 +47,7 @@ async def test_my_status_connected(mock_update, mock_context, mocker):
 
 async def test_my_status_not_connected(mock_update, mock_context, mocker):
     mock_update.set_message_text("/my_status")
-    mocker.patch('handlers.gs.is_user_connected', return_value=False)
+    mocker.patch('handlers.gs.is_user_connected', new_callable=AsyncMock, return_value=False)
 
     await handlers.my_status(mock_update, mock_context)
 
@@ -60,9 +58,8 @@ async def test_my_status_not_connected(mock_update, mock_context, mocker):
 
 async def test_my_status_invalid_creds(mock_update, mock_context, mocker):
     mock_update.set_message_text("/my_status")
-    mocker.patch('handlers.gs.is_user_connected', return_value=True)
-    # Mock _build_calendar_service_client to simulate invalid connection
-    mocker.patch('handlers.gs._build_calendar_service_client', return_value=None)
+    mocker.patch('handlers.gs.is_user_connected', new_callable=AsyncMock, return_value=True)
+    mocker.patch('handlers.gs._build_calendar_service_client', new_callable=AsyncMock, return_value=None)
 
     await handlers.my_status(mock_update, mock_context)
     mock_update.effective_message.reply_text.assert_called_once_with(
@@ -72,26 +69,28 @@ async def test_my_status_invalid_creds(mock_update, mock_context, mocker):
 
 async def test_disconnect_calendar(mock_update, mock_context, mocker):
     mock_update.set_message_text("/disconnect_calendar")
-    mock_delete = mocker.patch('handlers.gs.delete_user_token', return_value=True)
-    # Patch config state directly if needed
-    with patch.dict(config.pending_events, {TEST_USER_ID: {}}), \
-            patch.dict(config.pending_deletions, {TEST_USER_ID: {}}):
-        await handlers.disconnect_calendar(mock_update, mock_context)
+    mock_delete_token = mocker.patch('handlers.gs.delete_user_token', new_callable=AsyncMock, return_value=True)
+    mock_delete_pending_event = mocker.patch('handlers.gs.delete_pending_event', new_callable=AsyncMock)
+    mock_delete_pending_deletion = mocker.patch('handlers.gs.delete_pending_deletion', new_callable=AsyncMock)
+    
+    # config.pending_events and config.pending_deletions are no longer used, 
+    # direct gs calls are made to delete from Firestore.
+    await handlers.disconnect_calendar(mock_update, mock_context)
 
-        mock_delete.assert_called_once_with(TEST_USER_ID)
+    mock_delete_token.assert_awaited_once_with(TEST_USER_ID)
+    mock_delete_pending_event.assert_awaited_once_with(TEST_USER_ID)
+    mock_delete_pending_deletion.assert_awaited_once_with(TEST_USER_ID)
         mock_update.effective_message.reply_text.assert_called_once_with(
             "Calendar connection removed."
         )
-        # Assert pending states were cleared for the user
-        assert TEST_USER_ID not in config.pending_events
-        assert TEST_USER_ID not in config.pending_deletions
+        # Assert pending states were cleared for the user - this check is now implicit in gs calls
 
 
 # --- Timezone Conversation ---
 
 async def test_set_timezone_start(mock_update, mock_context, mocker):
     mock_update.set_message_text("/set_timezone")
-    mocker.patch('handlers.gs.get_user_timezone_str', return_value=None)  # Simulate not set
+    mocker.patch('handlers.gs.get_user_timezone_str', new_callable=AsyncMock, return_value=None)  # Simulate not set
 
     result_state = await handlers.set_timezone_start(mock_update, mock_context)
 
@@ -104,7 +103,7 @@ async def test_set_timezone_start(mock_update, mock_context, mocker):
 
 async def test_set_timezone_start_already_set(mock_update, mock_context, mocker):
     mock_update.set_message_text("/set_timezone")
-    mocker.patch('handlers.gs.get_user_timezone_str', return_value=TEST_TIMEZONE_STR)
+    mocker.patch('handlers.gs.get_user_timezone_str', new_callable=AsyncMock, return_value=TEST_TIMEZONE_STR)
 
     result_state = await handlers.set_timezone_start(mock_update, mock_context)
 
@@ -119,12 +118,12 @@ async def test_received_timezone_valid(mock_update, mock_context, mocker):
     # Mock pytz validation
     mocker.patch('handlers.pytz.timezone')
     # Mock successful save
-    mock_save = mocker.patch('handlers.gs.set_user_timezone', return_value=True)
+    mock_save = mocker.patch('handlers.gs.set_user_timezone', new_callable=AsyncMock, return_value=True)
 
     result_state = await handlers.received_timezone(mock_update, mock_context)
 
     assert result_state == ConversationHandler.END
-    mock_save.assert_called_once_with(TEST_USER_ID, TEST_TIMEZONE_STR)
+    mock_save.assert_awaited_once_with(TEST_USER_ID, TEST_TIMEZONE_STR) # username removed
     mock_update.effective_message.reply_text.assert_called_once()
     call_args = mock_update.effective_message.reply_text.call_args[0][0]
     assert f"Timezone set to `{TEST_TIMEZONE_STR}`" in call_args
@@ -135,12 +134,12 @@ async def test_received_timezone_invalid(mock_update, mock_context, mocker):
     mock_update.set_message_text(invalid_tz)
     # Mock pytz validation to raise error
     mocker.patch('handlers.pytz.timezone', side_effect=handlers.UnknownTimeZoneError)
-    mock_save = mocker.patch('handlers.gs.set_user_timezone')
+    mock_save = mocker.patch('handlers.gs.set_user_timezone', new_callable=AsyncMock)
 
     result_state = await handlers.received_timezone(mock_update, mock_context)
 
     assert result_state == handlers.ASKING_TIMEZONE  # Should stay in same state
-    mock_save.assert_not_called()
+    mock_save.assert_not_awaited()
     mock_update.effective_message.reply_text.assert_called_once()
     call_args = mock_update.effective_message.reply_text.call_args[0][0]
     assert f"Sorry, '{invalid_tz}' doesn't look like a valid IANA timezone" in call_args
@@ -157,7 +156,7 @@ async def test_cancel_timezone(mock_update, mock_context):
 
 async def test_handle_message_connect_first(mock_update, mock_context, mocker):
     mock_update.set_message_text("What's on my calendar?")
-    mocker.patch('handlers.gs.is_user_connected', return_value=False)
+    mocker.patch('handlers.gs.is_user_connected', new_callable=AsyncMock, return_value=False)
     mock_agent_init = mocker.patch('handlers.initialize_agent')  # Agent shouldn't be called
 
     await handlers.handle_message(mock_update, mock_context)
@@ -171,8 +170,8 @@ async def test_handle_message_connect_first(mock_update, mock_context, mocker):
 async def test_handle_message_set_timezone_first_strict(mock_update, mock_context, mocker):
     # This test assumes the strict behaviour (prompting for timezone if not set)
     mock_update.set_message_text("What's on my calendar?")
-    mocker.patch('handlers.gs.is_user_connected', return_value=True)
-    mocker.patch('handlers.gs.get_user_timezone_str', return_value=None)  # Timezone NOT set
+    mocker.patch('handlers.gs.is_user_connected', new_callable=AsyncMock, return_value=True)
+    mocker.patch('handlers.gs.get_user_timezone_str', new_callable=AsyncMock, return_value=None)  # Timezone NOT set
     mock_agent_init = mocker.patch('handlers.initialize_agent')
 
     await handlers.handle_message(mock_update, mock_context)
@@ -189,8 +188,12 @@ async def test_handle_message_agent_invoked(mock_update, mock_context, mocker, m
     user_message = "What's on my calendar tomorrow?"
     agent_response_text = "Agent says: You have a meeting at 10 AM."
     mock_update.set_message_text(user_message)
-    mocker.patch('handlers.gs.is_user_connected', return_value=True)
-    mocker.patch('handlers.gs.get_user_timezone_str', return_value=TEST_TIMEZONE_STR)
+    mocker.patch('handlers.gs.is_user_connected', new_callable=AsyncMock, return_value=True)
+    mocker.patch('handlers.gs.get_user_timezone_str', new_callable=AsyncMock, return_value=TEST_TIMEZONE_STR)
+    # Mock get_pending_event and get_pending_deletion to return None, as they are now async
+    mocker.patch('handlers.gs.get_pending_event', new_callable=AsyncMock, return_value=None)
+    mocker.patch('handlers.gs.get_pending_deletion', new_callable=AsyncMock, return_value=None)
+
 
     # Configure mock agent response
     mock_agent_executor.ainvoke.return_value = {'output': agent_response_text}
@@ -278,18 +281,21 @@ async def test_handle_message_agent_confirmation_create(mock_update, mock_contex
     agent_response_text = confirmation_question  # Agent's final output IS the question
 
     mock_update.set_message_text(user_message)
-    mocker.patch('handlers.gs.is_user_connected', return_value=True)
-    mocker.patch('handlers.gs.get_user_timezone_str', return_value=TEST_TIMEZONE_STR)
+    mocker.patch('handlers.gs.is_user_connected', new_callable=AsyncMock, return_value=True)
+    mocker.patch('handlers.gs.get_user_timezone_str', new_callable=AsyncMock, return_value=TEST_TIMEZONE_STR)
 
     # Configure agent response
     mock_agent_executor.ainvoke.return_value = {'output': agent_response_text}
 
     # Simulate that the *tool run* (mocked within agent execution usually)
-    # placed data into the config pending state before agent finished
+    # placed data into the Firestore via the now async gs.add_pending_event
     mock_event_data = {'summary': 'Lunch',
                        'start': {'dateTime': '2025-05-18T12:33:00+02:00', 'timeZone': 'Europe/Amsterdam'},
-                       'end': {'dateTime': '2025-05-18T13:33:00+02:00', 'timeZone': 'Europe/Amsterdam'}, }  # Example
-    config.pending_events[TEST_USER_ID] = mock_event_data  # Manually set state for test
+                       'end': {'dateTime': '2025-05-18T13:33:00+02:00', 'timeZone': 'Europe/Amsterdam'}, }
+    
+    # Mock get_pending_event to return this data
+    mocker.patch('handlers.gs.get_pending_event', new_callable=AsyncMock, return_value=mock_event_data)
+    mocker.patch('handlers.gs.get_pending_deletion', new_callable=AsyncMock, return_value=None) # Ensure no pending deletion
 
     mock_context.user_data['lc_history'] = []
 
@@ -319,14 +325,14 @@ async def test_handle_message_agent_confirmation_create(mock_update, mock_contex
 async def test_button_callback_confirm_create_success(mock_update, mock_context, mocker):
     mock_update.set_callback_data("confirm_event_create")
 
-    # Simulate pending event data exists
-    event_details_to_create = {'summary': 'Pending Lunch', 'start': {...}, 'end': {...}}
-    config.pending_events[TEST_USER_ID] = event_details_to_create
-
-    # Mock the actual Google service call
+    event_details_to_create = {'summary': 'Pending Lunch', 'start': {'dateTime': '...'}, 'end': {'dateTime': '...'}}
+    # Mock get_pending_event
+    mock_get_pending = mocker.patch('handlers.gs.get_pending_event', new_callable=AsyncMock, return_value=event_details_to_create)
+    
     created_link = "http://example.com/created_event"
-    mock_create = mocker.patch('handlers.gs.create_calendar_event',
-                               return_value=(True, "Event 'Pending Lunch' created successfully.", created_link))
+    mock_create = mocker.patch('handlers.gs.create_calendar_event', new_callable=AsyncMock, return_value=(True, "Event 'Pending Lunch' created successfully.", created_link))
+    mock_delete_pending = mocker.patch('handlers.gs.delete_pending_event', new_callable=AsyncMock)
+    mocker.patch('handlers.gs.is_user_connected', new_callable=AsyncMock, return_value=True) # For the re-check after create
 
     await handlers.button_callback(mock_update, mock_context)
 
@@ -337,38 +343,35 @@ async def test_button_callback_confirm_create_success(mock_update, mock_context,
     )
 
     # Assert gs create called with correct data
-    mock_create.assert_called_once_with(TEST_USER_ID, event_details_to_create)
+    mock_get_pending.assert_awaited_once_with(TEST_USER_ID)
+    mock_create.assert_awaited_once_with(TEST_USER_ID, event_details_to_create)
 
     # Assert final message edit
     final_text = f"Event 'Pending Lunch' created successfully.\nView: {created_link}"
     mock_update.callback_query.edit_message_text.assert_called_with(
-        final_text, parse_mode=ParseMode.HTML
+        final_text, parse_mode=ParseMode.HTML, disable_web_page_preview=True
     )
-
-    # Assert pending state cleared
-    assert TEST_USER_ID not in config.pending_events
+    mock_delete_pending.assert_awaited_once_with(TEST_USER_ID)
 
 
 async def test_button_callback_confirm_create_expired(mock_update, mock_context, mocker):
     mock_update.set_callback_data("confirm_event_create")
-    # Ensure no pending data exists
-    if TEST_USER_ID in config.pending_events: del config.pending_events[TEST_USER_ID]
-    mock_create = mocker.patch('handlers.gs.create_calendar_event')
+    mocker.patch('handlers.gs.get_pending_event', new_callable=AsyncMock, return_value=None) # No pending event
+    mock_create = mocker.patch('handlers.gs.create_calendar_event', new_callable=AsyncMock)
 
     await handlers.button_callback(mock_update, mock_context)
 
     mock_update.callback_query.answer.assert_called_once()
     mock_update.callback_query.edit_message_text.assert_called_once_with(
-        "Event details expired."
+        "Event details expired or not found." # Message changed slightly due to `get_pending_event` returning None
     )
-    mock_create.assert_not_called()
+    mock_create.assert_not_awaited()
 
 
 async def test_button_callback_cancel_create(mock_update, mock_context, mocker):
     mock_update.set_callback_data("cancel_event_create")
-    # Simulate pending data exists initially
-    config.pending_events[TEST_USER_ID] = {'summary': 'something'}
-    mock_create = mocker.patch('handlers.gs.create_calendar_event')
+    mock_delete_pending = mocker.patch('handlers.gs.delete_pending_event', new_callable=AsyncMock)
+    mock_create = mocker.patch('handlers.gs.create_calendar_event', new_callable=AsyncMock)
 
     await handlers.button_callback(mock_update, mock_context)
 
@@ -376,8 +379,8 @@ async def test_button_callback_cancel_create(mock_update, mock_context, mocker):
     mock_update.callback_query.edit_message_text.assert_called_once_with(
         "Event creation cancelled."
     )
-    mock_create.assert_not_called()
-    assert TEST_USER_ID not in config.pending_events  # Assert state cleared
+    mock_create.assert_not_awaited()
+    mock_delete_pending.assert_awaited_once_with(TEST_USER_ID)
 
 # --- Add similar tests for delete confirmations ---
 # test_button_callback_confirm_delete_success

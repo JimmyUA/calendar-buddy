@@ -1,6 +1,6 @@
 # tests/test_agent_tools.py
 from datetime import datetime
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
 import pytz
@@ -38,34 +38,36 @@ async def test_create_tool_arun_success(create_tool, mock_llm_service, mocker):
     mock_now.isoformat.return_value = "2024-08-19T10:00:00-07:00" # Example ISO time
     # Patch datetime inside the tool's module
     mocker.patch('llm.tools.create_calendar.datetime', now=lambda tz: mock_now)
+    
+    # Mock gs.add_pending_event as it's now async and called by the tool
+    mock_add_pending = mocker.patch('llm.tools.create_calendar.gs.add_pending_event', new_callable=AsyncMock, return_value=True)
 
-    # Patch config directly where state is stored
-    with patch.dict(config.pending_events, {}), patch.dict(config.pending_deletions, {}):
-        result_string = await create_tool._arun(event_description=event_description)
+    result_string = await create_tool._arun(event_description=event_description)
 
-        # Assert LLM extraction was called correctly
-        mock_extract.assert_called_once_with(event_description, mock_now.isoformat(), TEST_TIMEZONE_STR)
+    # Assert LLM extraction was called correctly
+    mock_extract.assert_called_once_with(event_description, mock_now.isoformat(), TEST_TIMEZONE_STR)
+    
+    # Assert gs.add_pending_event was called
+    mock_add_pending.assert_awaited_once_with(TEST_USER_ID, extracted_event_data)
 
-        # Assert the result is the confirmation string
-        assert "Should I add this to your calendar?" in result_string
-        assert "Summary: Meeting with Bob" in result_string
-        assert "Start: Tue, Aug 20, 2024 at 03:00 PM PDT" in result_string # Check formatted time
+    # Assert the result is the confirmation string
+    assert "Should I add this to your calendar?" in result_string
+    assert "Summary: Meeting with Bob" in result_string
+    assert "Start: Tue, Aug 20, 2024 at 03:00 PM PDT" in result_string # Check formatted time
 
-        # Assert pending state was stored
-        assert config.pending_events.get(TEST_USER_ID) == extracted_event_data
-        assert TEST_USER_ID not in config.pending_deletions # Ensure delete state was cleared if existed
 
 async def test_create_tool_arun_llm_fail(create_tool, mock_llm_service, mocker):
     event_description = "invalid stuff"
     # Mock the LLM function to return None (failure)
     mock_extract = mocker.patch('llm.tools.create_calendar.llm_service.extract_create_args_llm', return_value=None)
     mocker.patch('llm.tools.create_calendar.datetime') # Mock datetime just in case
+    mock_add_pending = mocker.patch('llm.tools.create_calendar.gs.add_pending_event', new_callable=AsyncMock)
 
-    with patch.dict(config.pending_events, {}):
-        result_string = await create_tool._arun(event_description=event_description)
 
-        assert "Error: Could not extract valid event details" in result_string
-        assert not config.pending_events # No pending event stored
+    result_string = await create_tool._arun(event_description=event_description)
+
+    assert "Error: Could not extract valid event details" in result_string
+    mock_add_pending.assert_not_awaited() # No pending event should be stored
 
 # --- Delete Tool ---
 @pytest.fixture
@@ -80,43 +82,35 @@ async def test_delete_tool_arun_success(delete_tool, mocker):
         'start': {'dateTime': '2024-08-21T09:00:00-07:00'},
         'end': {'dateTime': '2024-08-21T10:00:00-07:00'}
     }
-    # Mock the google_services function called by the tool
-    mock_get_event = mocker.patch('llm.tools.delete_calendar.gs.get_calendar_event_by_id',
-                                  return_value=mock_event_details)
-    # Mock the utility function for time formatting
+    mock_get_event = mocker.patch('llm.tools.delete_calendar.gs.get_calendar_event_by_id', new_callable=AsyncMock, return_value=mock_event_details)
+    mock_add_pending_deletion = mocker.patch('llm.tools.delete_calendar.gs.add_pending_deletion', new_callable=AsyncMock, return_value=True)
     mocker.patch('llm.tools.delete_calendar._format_event_time', return_value="Wed, Aug 21, 09:00 AM PDT")
 
-    with patch.dict(config.pending_deletions, {}), patch.dict(config.pending_events, {}):
-        result_string = await delete_tool._arun(event_id=event_id_to_delete)
+    result_string = await delete_tool._arun(event_id=event_id_to_delete)
 
-        # Assert gs function was called
-        mock_get_event.assert_called_once_with(TEST_USER_ID, event_id_to_delete)
+    mock_get_event.assert_awaited_once_with(TEST_USER_ID, event_id_to_delete)
+    mock_add_pending_deletion.assert_awaited_once_with(TEST_USER_ID, {'event_id': event_id_to_delete, 'summary': 'Event To Delete'})
 
-        # Assert confirmation string
-        assert "Should I delete this event?" in result_string
-        assert "Found event: 'Event To Delete'" in result_string
-        assert "(Wed, Aug 21, 09:00 AM PDT)" in result_string
+    assert "Should I delete this event?" in result_string
+    assert "Found event: 'Event To Delete'" in result_string
+    assert "(Wed, Aug 21, 09:00 AM PDT)" in result_string
 
-        # Assert pending state
-        assert config.pending_deletions.get(TEST_USER_ID) == {'event_id': event_id_to_delete, 'summary': 'Event To Delete'}
-        assert TEST_USER_ID not in config.pending_events # Ensure create state cleared
 
 async def test_delete_tool_arun_invalid_id(delete_tool, mocker):
-     with patch.dict(config.pending_deletions, {}):
-        result_string = await delete_tool._arun(event_id="") # Empty ID
-        assert "Error: A valid event ID is required" in result_string
-        assert not config.pending_deletions
+    mock_add_pending_deletion = mocker.patch('llm.tools.delete_calendar.gs.add_pending_deletion', new_callable=AsyncMock)
+    result_string = await delete_tool._arun(event_id="") # Empty ID
+    assert "Error: A valid event ID is required" in result_string
+    mock_add_pending_deletion.assert_not_awaited()
 
 async def test_delete_tool_arun_event_not_found(delete_tool, mocker):
     event_id_not_found = "bad_id"
-    # Mock gs function to return None
-    mock_get_event = mocker.patch('llm.tools.delete_calendar.gs.get_calendar_event_by_id', return_value=None)
+    mock_get_event = mocker.patch('llm.tools.delete_calendar.gs.get_calendar_event_by_id', new_callable=AsyncMock, return_value=None)
+    mock_add_pending_deletion = mocker.patch('llm.tools.delete_calendar.gs.add_pending_deletion', new_callable=AsyncMock)
 
-    with patch.dict(config.pending_deletions, {}):
-        result_string = await delete_tool._arun(event_id=event_id_not_found)
+    result_string = await delete_tool._arun(event_id=event_id_not_found)
 
-        assert f"Error: Could not find event with ID '{event_id_not_found}'" in result_string
-        assert not config.pending_deletions
+    assert f"Error: Could not find event with ID '{event_id_not_found}'" in result_string
+    mock_add_pending_deletion.assert_not_awaited()
 
 # --- Read Tool ---
 @pytest.fixture
@@ -132,14 +126,14 @@ async def test_read_tool_arun_success(read_tool, mocker):
     # Mock dependencies
     mocker.patch('llm.tools.read_calendar.datetime') # Mock datetime.now used for LLM context
     mock_extract = mocker.patch('llm.tools.read_calendar.llm_service.extract_read_args_llm', return_value=mock_llm_args)
-    mock_get_events = mocker.patch('llm.tools.read_calendar.gs.get_calendar_events', return_value=mock_events)
+    mock_get_events = mocker.patch('llm.tools.read_calendar.gs.get_calendar_events', new_callable=AsyncMock, return_value=mock_events)
     mock_format = mocker.patch('llm.tools.read_calendar.format_event_list_for_agent', return_value=mock_formatted_output)
 
     result = await read_tool._arun(time_period=time_period)
 
     assert result == mock_formatted_output
     mock_extract.assert_called_once() # Check LLM call happened
-    mock_get_events.assert_called_once_with(TEST_USER_ID, time_min_iso=mock_llm_args['start_iso'], time_max_iso=mock_llm_args['end_iso'])
+    mock_get_events.assert_awaited_once_with(TEST_USER_ID, time_min_iso=mock_llm_args['start_iso'], time_max_iso=mock_llm_args['end_iso'])
     mock_format.assert_called_once_with(mock_events, f"for '{time_period}'", TEST_TIMEZONE_STR, include_ids=False)
 
 
