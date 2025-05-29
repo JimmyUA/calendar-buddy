@@ -911,7 +911,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
                 requester_notification_text = (
                     f"🎉 Your calendar access request for {target_user_display} "
-                    f"\(for period {period_start_display} to {period_end_display}\) was APPROVED.\n\n"  # Note the escaped \( and \)
+                    f"\(for period {period_start_display} to {period_end_display}\) was APPROVED\.\n\n"  # Escaped \(, \), and \.
                     f"{events_summary_message}" # events_summary_message components are already individually escaped
                 )
                 
