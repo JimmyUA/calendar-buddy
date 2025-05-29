@@ -341,7 +341,7 @@ def get_google_auth_flow():
         logger.error(f"Error creating OAuth flow from env var config: {e}", exc_info=True)
         return None
 
-def generate_oauth_state(user_id: int) -> str | None:
+async def generate_oauth_state(user_id: int) -> str | None:
     """Generates a unique state token and stores the mapping in Firestore."""
     if not OAUTH_STATES_COLLECTION: logger.error("Firestore OAUTH_STATES_COLLECTION not available."); return None
     state = str(uuid.uuid4())

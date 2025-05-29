@@ -883,7 +883,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
             events_summary_message = f"🗓️ Calendar events for {request_data.get('requester_name', 'them')} " \
                                      f"(from your calendar) for the period:\n"
-            
+
             target_tz_str = await gs.get_user_timezone_str(int(target_user_id)) # MODIFIED
             target_tz = pytz.timezone(target_tz_str) if target_tz_str else pytz.utc
 
@@ -917,8 +917,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.edit_message_text("Failed to update request status. Please try again.")
 
     elif callback_data.startswith("deny_access_"):
-        request_id = callback_data.split("_")[-1]
         await query.answer() # Moved to the top
+        request_id = callback_data.split("_")[-1]
         logger.info(f"User {user_id} (target) attempts to deny access request {request_id}")
         request_data = await gs.get_calendar_access_request(request_id) # MODIFIED
 
