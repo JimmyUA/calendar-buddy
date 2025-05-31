@@ -25,7 +25,7 @@ def _format_event_time(event: dict, user_tz: pytz.BaseTzInfo) -> str:
             if end_dt_str:
                 end_dt = dateutil_parser.isoparse(end_dt_str).date() - timedelta(days=1)
                 if end_dt > start_dt: # Multi-day
-                    return f"{start_dt.strftime('%a, %b %d')} – {end_dt.strftime('%a, %b %d')} (All day)" # Replaced hyphen with en-dash
+                    return f"{start_dt.strftime('%a, %b %d')} - {end_dt.strftime('%a, %b %d')} (All day)"
             return f"{start_dt.strftime('%a, %b %d')} (All day)" # Single day
         else: # Timed event
              if not end_str: end_str = start_str # Fallback if end missing
@@ -37,7 +37,7 @@ def _format_event_time(event: dict, user_tz: pytz.BaseTzInfo) -> str:
              end_fmt = end_dt_aware.strftime('%I:%M %p %Z')
              if start_dt_aware.date() != end_dt_aware.date():
                  end_fmt = end_dt_aware.strftime('%b %d, %Y %I:%M %p %Z')
-             return f"{start_fmt} – {end_fmt}" # Replaced hyphen with en-dash
+             return f"{start_fmt} - {end_fmt}"
     except Exception as e:
         logger.error(f"Error parsing/formatting event time: {e}. Event ID: {event.get('id')}, Start: '{start_str}', End: '{end_str}'", exc_info=True)
         return f"{start_str} [Error Formatting]"
