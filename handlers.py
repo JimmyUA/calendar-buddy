@@ -906,7 +906,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     summary_text = escape_markdown_v2(summary_content_for_escaping)
                     escaped_time_str = escape_markdown_v2(time_str)
                     # Ensure literal parentheses are escaped for MarkdownV2
-                    events_summary_message += f"\n* *{summary_text}* \({escaped_time_str}\)" # Changed - to *
+                    events_summary_message += f"\n* {summary_text} \({escaped_time_str}\)" # Removed bold from summary
             
             try:
                 logger.info(f"[REQ_ID: {request_id}] About to send message to requester at {time.time()}")
