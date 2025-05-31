@@ -47,8 +47,11 @@ def escape_markdown_v2(text: str) -> str:
     escape_chars = r'_*[]()~`>#+-=|{}.!' # Corrected: removed 煖 and ensured - is present
     # In MarkdownV2, reserved characters are: _ * [ ] ( ) ~ ` > # + - = | { } . !
     # All of these characters must be escaped with a preceding '\' character.
-    for char in escape_chars:
-        text = text.replace(char, '\\' + char)
+    for char_to_escape in escape_chars:
+        if char_to_escape == '*':
+            text = text.replace(char_to_escape, '[ASTERISK_LITERAL]') # Temporarily neutralize asterisks
+        else:
+            text = text.replace(char_to_escape, '\\' + char_to_escape)
     return text
 
 # Add any other general utility functions here later
