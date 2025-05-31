@@ -894,8 +894,15 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             else:
                 for event in events:
                     time_str = _format_event_time(event, target_tz)
-                    # Apply escape_markdown_v2 to summary and time_str
-                    summary_text = escape_markdown_v2(event.get('summary', 'No Title'))
+
+                    # New logic to ensure summary_content is never empty or just whitespace
+                    raw_summary = event.get('summary') # Or event.get('summary', '')
+                    if not raw_summary or raw_summary.isspace():
+                        summary_content_for_escaping = "(No title)"
+                    else:
+                        summary_content_for_escaping = raw_summary
+
+                    summary_text = escape_markdown_v2(summary_content_for_escaping)
                     escaped_time_str = escape_markdown_v2(time_str)
 # Ensure literal parentheses are escaped for MarkdownV2
                     events_summary_message += f"\n* *{summary_text}* \({escaped_time_str}\)" # Changed - to *
