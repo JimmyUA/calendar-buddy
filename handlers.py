@@ -41,22 +41,18 @@ def _format_iso_datetime_for_display(iso_string: str, target_tz_str: str | None 
             try:
                 target_tz = pytz.timezone(target_tz_str)
                 dt_object = dt_object.astimezone(target_tz)
-                formatted_str = dt_object.strftime('%Y-%m-%d %I:%M %p %Z')
-                return formatted_str.replace('-', '–')
+                return dt_object.strftime('%Y-%m-%d %I:%M %p %Z')
             except UnknownTimeZoneError:
                 logger.warning(f"Unknown timezone string '{target_tz_str}'. Falling back to UTC display.")
                 dt_object = dt_object.astimezone(pytz.utc)
-                formatted_str = dt_object.strftime('%Y-%m-%d %I:%M %p UTC')
-                return formatted_str.replace('-', '–')
+                return dt_object.strftime('%Y-%m-%d %I:%M %p UTC')
         # If no target_tz_str, format as is, ensuring it's identifiable (e.g. UTC if offset is Z)
         if dt_object.tzinfo:
-            formatted_str = dt_object.strftime('%Y-%m-%d %I:%M %p %Z') # Includes timezone if available
-            return formatted_str.replace('-', '–')
+            return dt_object.strftime('%Y-%m-%d %I:%M %p %Z') # Includes timezone if available
         else: # Naive datetime, assume UTC for clarity or raise error
             # For this bot, naive datetimes from LLM parsing should ideally be UTC or have offset.
             # If truly naive, it's ambiguous. Defaulting to show it as is with a note or UTC.
-            formatted_str = dt_object.strftime('%Y-%m-%d %I:%M %p (Timezone not specified, assumed UTC)')
-            return formatted_str.replace('-', '–')
+            return dt_object.strftime('%Y-%m-%d %I:%M %p (Timezone not specified, assumed UTC)')
 
     except ValueError:
         logger.error(f"Could not parse ISO string: {iso_string}")
@@ -902,7 +898,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     summary_text = escape_markdown_v2(event.get('summary', 'No Title'))
                     escaped_time_str = escape_markdown_v2(time_str)
 # Ensure literal parentheses are escaped for MarkdownV2
-                    events_summary_message += f"\n- *{summary_text}* \({escaped_time_str}\)"
+                    events_summary_message += f"\n* *{summary_text}* \({escaped_time_str}\)" # Changed - to *
             
             try:
                 logger.info(f"[REQ_ID: {request_id}] About to send message to requester at {time.time()}")
