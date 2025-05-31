@@ -41,18 +41,22 @@ def _format_iso_datetime_for_display(iso_string: str, target_tz_str: str | None 
             try:
                 target_tz = pytz.timezone(target_tz_str)
                 dt_object = dt_object.astimezone(target_tz)
-                return dt_object.strftime('%Y-%m-%d %I:%M %p %Z')
+                formatted_str = dt_object.strftime('%Y-%m-%d %I:%M %p %Z')
+                return formatted_str.replace('-', '–')
             except UnknownTimeZoneError:
                 logger.warning(f"Unknown timezone string '{target_tz_str}'. Falling back to UTC display.")
                 dt_object = dt_object.astimezone(pytz.utc)
-                return dt_object.strftime('%Y-%m-%d %I:%M %p UTC')
+                formatted_str = dt_object.strftime('%Y-%m-%d %I:%M %p UTC')
+                return formatted_str.replace('-', '–')
         # If no target_tz_str, format as is, ensuring it's identifiable (e.g. UTC if offset is Z)
         if dt_object.tzinfo:
-            return dt_object.strftime('%Y-%m-%d %I:%M %p %Z') # Includes timezone if available
+            formatted_str = dt_object.strftime('%Y-%m-%d %I:%M %p %Z') # Includes timezone if available
+            return formatted_str.replace('-', '–')
         else: # Naive datetime, assume UTC for clarity or raise error
             # For this bot, naive datetimes from LLM parsing should ideally be UTC or have offset.
             # If truly naive, it's ambiguous. Defaulting to show it as is with a note or UTC.
-            return dt_object.strftime('%Y-%m-%d %I:%M %p (Timezone not specified, assumed UTC)')
+            formatted_str = dt_object.strftime('%Y-%m-%d %I:%M %p (Timezone not specified, assumed UTC)')
+            return formatted_str.replace('-', '–')
 
     except ValueError:
         logger.error(f"Could not parse ISO string: {iso_string}")
@@ -903,7 +907,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             
             try:
                 logger.info(f"[REQ_ID: {request_id}] About to send message to requester at {time.time()}")
-                
+
                 # Escape dynamic parts for the main message
                 target_user_display = escape_markdown_v2(str(request_data.get('target_user_id', 'the user')))
                 period_start_display = escape_markdown_v2(_format_iso_datetime_for_display(start_time_iso))
@@ -914,7 +918,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     f"\(for period {period_start_display} to {period_end_display}\) was APPROVED\.\n\n"  # Escaped \(, \), and \.
                     f"{events_summary_message}" # events_summary_message components are already individually escaped
                 )
-                
+
                 await context.bot.send_message(
                     chat_id=requester_id,
                     text=requester_notification_text,
