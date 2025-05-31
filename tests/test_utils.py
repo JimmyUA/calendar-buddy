@@ -114,7 +114,7 @@ class TestEscapeMarkdownV2:
         original = ".-_"
         expected = "\.\-\_"
         assert escape_markdown_v2(original) == expected
-    
+
     def test_numbers_and_special_chars(self):
         original = "1. Item (first)"
         expected = "1\. Item \(first\)"
