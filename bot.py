@@ -1,8 +1,15 @@
 # bot.py
 import logging
 import threading # Import threading
+import atexit
 from flask import Flask # Import Flask
-from telegram import Update
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+import google_services
+import scheduler_jobs # Assuming this is in the root directory
+from datetime import datetime, time
+import pytz
+from telegram import Bot, Update # Ensure Bot is imported
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -30,6 +37,9 @@ logging.getLogger("googleapiclient.discovery_cache").setLevel(logging.ERROR)
 
 logger = logging.getLogger(__name__)
 
+# --- Initialize Scheduler ---
+scheduler = BackgroundScheduler(timezone="UTC") # Or configure as needed
+
 health_app = Flask(__name__)
 
 @health_app.route('/', methods=['GET']) # Use /health endpoint
@@ -48,6 +58,66 @@ def run_health_server():
     log = logging.getLogger('werkzeug')
     log.setLevel(logging.WARNING)
     health_app.run(host='0.0.0.0', port=port, use_reloader=False)
+
+async def scheduled_daily_job_wrapper(bot: Bot):
+    logger.info("Scheduler: Running daily job wrapper...")
+    users_to_notify = google_services.get_all_connected_user_ids_with_timezone()
+    if not users_to_notify:
+        logger.info("Scheduler: No users found for daily notifications.")
+        return
+
+    for user_info in users_to_notify:
+        user_id = user_info['user_id']
+        user_timezone_str = user_info['timezone']
+        try:
+            user_tz = pytz.timezone(user_timezone_str)
+            now_user_local = datetime.now(user_tz)
+
+            # Check if it's 22:00 in user's local time
+            if now_user_local.hour == 22:
+                logger.info(f"Scheduler: Triggering daily summary for user {user_id} at local time {now_user_local.strftime('%H:%M:%S')}")
+                await scheduler_jobs.send_daily_event_summary(bot, user_id, user_timezone_str)
+            # else:
+                # logger.debug(f"Scheduler: Daily check for user {user_id}, local time {now_user_local.strftime('%H:%M')}, not 22:00.")
+
+        except pytz.exceptions.UnknownTimeZoneError:
+            logger.error(f"Scheduler: Unknown timezone '{user_timezone_str}' for user {user_id}. Cannot process daily job.")
+        except Exception as e:
+            logger.error(f"Scheduler: Error processing daily job for user {user_id}: {e}", exc_info=True)
+
+async def scheduled_weekly_job_wrapper(bot: Bot):
+    logger.info("Scheduler: Running weekly job wrapper...")
+    users_to_notify = google_services.get_all_connected_user_ids_with_timezone()
+    if not users_to_notify:
+        logger.info("Scheduler: No users found for weekly notifications.")
+        return
+
+    for user_info in users_to_notify:
+        user_id = user_info['user_id']
+        user_timezone_str = user_info['timezone']
+        try:
+            user_tz = pytz.timezone(user_timezone_str)
+            now_user_local = datetime.now(user_tz)
+
+            # Check if it's Sunday (weekday() == 6) and 20:00 local time
+            if now_user_local.weekday() == 6 and now_user_local.hour == 20:
+                logger.info(f"Scheduler: Triggering weekly summary for user {user_id} at local time {now_user_local.strftime('%H:%M:%S')}")
+                await scheduler_jobs.send_weekly_event_summary(bot, user_id, user_timezone_str)
+            # else:
+                # logger.debug(f"Scheduler: Weekly check for user {user_id}, local time {now_user_local.strftime('%A %H:%M')}, not Sunday 20:00.")
+
+        except pytz.exceptions.UnknownTimeZoneError:
+            logger.error(f"Scheduler: Unknown timezone '{user_timezone_str}' for user {user_id}. Cannot process weekly job.")
+        except Exception as e:
+            logger.error(f"Scheduler: Error processing weekly job for user {user_id}: {e}", exc_info=True)
+
+def shutdown_scheduler():
+    if scheduler.running:
+        logger.info("Shutting down scheduler...")
+        scheduler.shutdown()
+        logger.info("Scheduler shut down.")
+
+atexit.register(shutdown_scheduler)
 
 def main() -> None:
     """Start the bot."""
@@ -69,6 +139,14 @@ def main() -> None:
     health_thread = threading.Thread(target=run_health_server, daemon=True)
     health_thread.start()
     logger.info("Health check server thread started.")
+
+    try:
+        scheduler.start()
+        logger.info("Scheduler started.")
+    except Exception as e:
+        logger.error(f"Failed to start scheduler: {e}", exc_info=True)
+        # Decide if bot should exit or continue without scheduler
+        # Depending on severity, might want to: return
 
     # --- Create the Application ---
     application = (Application.builder()
@@ -113,6 +191,32 @@ def main() -> None:
 
     # Error Handler (Register last)
     application.add_error_handler(handlers.error_handler)
+
+    # --- Add Jobs to Scheduler ---
+    if scheduler.running: # Ensure scheduler started correctly
+        # Pass application.bot to the job wrappers
+        # Run daily check job e.g. every 15 minutes.
+        # Users will only get actual message if it's their local 22:00.
+        scheduler.add_job(
+            scheduled_daily_job_wrapper,
+            trigger=CronTrigger(minute='*/15'), # Check every 15 minutes
+            args=[application.bot], # Pass bot instance
+            id="daily_notifications_job",
+            name="Daily Event Notifications Wrapper",
+            replace_existing=True
+        )
+        # Run weekly check job e.g. every 15 minutes.
+        scheduler.add_job(
+            scheduled_weekly_job_wrapper,
+            trigger=CronTrigger(minute='*/15'), # Check every 15 minutes
+            args=[application.bot], # Pass bot instance
+            id="weekly_notifications_job",
+            name="Weekly Event Notifications Wrapper",
+            replace_existing=True
+        )
+        logger.info("Scheduled daily and weekly notification wrapper jobs.")
+    else:
+        logger.error("Scheduler not running. Cannot schedule notification jobs.")
 
     # --- Start the Bot ---
     logger.info("Running bot polling...")

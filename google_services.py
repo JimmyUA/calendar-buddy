@@ -462,3 +462,36 @@ def delete_grocery_list(user_id: int) -> bool:
     except Exception as e:
         logger.error(f"GS: Error deleting grocery list for user {user_id}: {e}", exc_info=True)
         return False
+
+def get_all_connected_user_ids_with_timezone() -> list[dict]:
+    """
+    Retrieves all user IDs and their timezones from the user_preferences collection.
+    Assumes user_id is the document ID and is an integer.
+    """
+    if not USER_PREFS_COLLECTION:
+        logger.error("GS: Firestore USER_PREFS_COLLECTION unavailable for get_all_connected_user_ids_with_timezone.")
+        return []
+
+    users_with_timezones = []
+    try:
+        docs = USER_PREFS_COLLECTION.stream() # Use stream() for iterating over documents
+        for doc in docs:
+            try:
+                user_id = int(doc.id)
+                user_data = doc.to_dict()
+                timezone_str = user_data.get('timezone')
+
+                if timezone_str:
+                    users_with_timezones.append({'user_id': user_id, 'timezone': timezone_str})
+                else:
+                    logger.warning(f"GS: User {doc.id} in preferences does not have a timezone set. Skipping for notifications.")
+            except ValueError:
+                logger.warning(f"GS: Document ID {doc.id} is not a valid integer user_id. Skipping.")
+            except Exception as e: # Catch other potential errors per document
+                logger.error(f"GS: Error processing document {doc.id} in preferences: {e}", exc_info=True)
+
+        logger.info(f"GS: Found {len(users_with_timezones)} users with timezones for notifications.")
+        return users_with_timezones
+    except Exception as e:
+        logger.error(f"GS: Error fetching documents from USER_PREFS_COLLECTION: {e}", exc_info=True)
+        return []

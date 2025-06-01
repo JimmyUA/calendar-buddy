@@ -28,3 +28,6 @@ httpx>=0.24.0
 # --- Pydantic will be installed as a dependency of langchain-core ---
 google-generativeai>=0.3.0 # Or a more recent version if known, e.g., >=0.5.0
 google-cloud-secret-manager>=2.16.0
+
+# --- Scheduler ---
+APScheduler>=3.0.0,<4.0.0

@@ -18,6 +18,10 @@ This project is a Telegram bot that uses a Large Language Model (LLM) agent to h
     - `/my_status`: Check the current connection status.
     - `/set_timezone`: Configure your local timezone.
     - `/help`: Get assistance and a list of commands.
+- **Scheduled Event Notifications**:
+    - **Daily Summary**: Every evening at 22:00 (10:00 PM) in your local timezone, you'll receive a message with all events scheduled for the *next day*.
+    - **Weekly Summary**: Every Sunday evening at 20:00 (8:00 PM) in your local timezone, you'll get a summary of all events scheduled for the *entire next week* (Monday to Sunday).
+    - *Prerequisites*: To receive these notifications, you must have successfully connected your Google Calendar (`/connect_calendar`) and set your local timezone (`/set_timezone`).
 
 ## Setup and Installation
 
