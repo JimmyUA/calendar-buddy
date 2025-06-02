@@ -612,6 +612,144 @@ async def delete_grocery_list(user_id: int) -> bool:
         logger.error(f"GS: Error deleting grocery list for user {user_id}: {e}", exc_info=True)
         return False
 
+# === Chat History Management ===
+
+async def get_chat_history(user_id: int, history_type: str) -> list[dict]:
+    """
+    Retrieves chat history from Firestore for a given user and history type.
+    """
+    if not db:
+        logger.error("GS: Firestore client (db) is not available for get_chat_history.")
+        return []
+
+    collection_name = None
+    if history_type == "lc":
+        collection_name = config.FS_COLLECTION_LC_CHAT_HISTORIES
+    elif history_type == "general":
+        collection_name = config.FS_COLLECTION_GENERAL_CHAT_HISTORIES
+    else:
+        logger.error(f"GS: Unknown history_type '{history_type}' for get_chat_history.")
+        return []
+
+    if not collection_name: # Should be caught by the else above, but as a safeguard
+        logger.error(f"GS: Collection name could not be determined for history_type '{history_type}'.")
+        return []
+
+    try:
+        user_doc_ref = db.collection(collection_name).document(str(user_id))
+        messages_ref = user_doc_ref.collection('messages')
+
+        query = messages_ref.order_by('timestamp', direction=firestore.Query.DESCENDING).limit(config.MAX_HISTORY_MESSAGES)
+        snapshots = await asyncio.to_thread(list, query.stream()) # type: ignore
+
+        if not snapshots:
+            logger.debug(f"GS: No chat history found for user {user_id}, type '{history_type}'.")
+            return []
+
+        messages = []
+        for doc in snapshots:
+            message_data = doc.to_dict()
+            if message_data and 'role' in message_data and 'content' in message_data:
+                messages.append({
+                    'role': message_data['role'],
+                    'content': message_data['content']
+                })
+            else:
+                logger.warning(f"GS: Malformed message document found for user {user_id}, type '{history_type}', doc ID {doc.id}")
+
+        # Messages are fetched in descending order, reverse to get ascending for chat context
+        messages.reverse()
+        logger.info(f"GS: Retrieved {len(messages)} messages for user {user_id}, type '{history_type}'.")
+        return messages
+
+    except Exception as e:
+        logger.error(f"GS: Error fetching chat history for user {user_id}, type '{history_type}': {e}", exc_info=True)
+        return []
+
+async def add_chat_message(user_id: int, role: str, content: str, history_type: str) -> bool:
+    """
+    Adds a chat message to Firestore and trims old messages if history exceeds max length.
+    """
+    if not db:
+        logger.error("GS: Firestore client (db) is not available for add_chat_message.")
+        return False
+
+    collection_name = None
+    if history_type == "lc":
+        collection_name = config.FS_COLLECTION_LC_CHAT_HISTORIES
+    elif history_type == "general":
+        collection_name = config.FS_COLLECTION_GENERAL_CHAT_HISTORIES
+    else:
+        logger.error(f"GS: Unknown history_type '{history_type}' for add_chat_message.")
+        return False
+    
+    if not collection_name:
+        logger.error(f"GS: Collection name could not be determined for history_type '{history_type}' in add_chat_message.")
+        return False
+
+    try:
+        user_doc_ref = db.collection(collection_name).document(str(user_id))
+        messages_ref = user_doc_ref.collection('messages')
+
+        new_message = {
+            'role': role,
+            'content': content,
+            'timestamp': firestore.SERVER_TIMESTAMP
+        }
+        # Add the new message
+        await asyncio.to_thread(messages_ref.add, new_message) # add() generates a unique ID
+        logger.info(f"GS: Added chat message for user {user_id}, type '{history_type}'.")
+
+        # History Trimming Logic
+        # This part is run sequentially after adding the message.
+        # For higher consistency, a transaction could be used for add + trim,
+        # but that adds complexity. Sequential is generally fine for chat logs.
+
+        # Get current count of messages
+        # Note: Counting all documents in a collection can be slow for very large collections.
+        # Firestore recommends against this for client-side code if performance is critical.
+        # However, for a limited subcollection of chat messages, it should be acceptable.
+        # Consider alternative strategies for very high-traffic systems (e.g., a counter field).
+        
+        # Re-fetch to count. This is not ideal for performance.
+        # A more optimized way would be to use a transaction to add and then check count,
+        # or maintain a counter document. For simplicity now, we'll re-query.
+        
+        # Get all message documents to count them.
+        all_messages_query = messages_ref.order_by('timestamp', direction=firestore.Query.ASCENDING)
+        all_message_snapshots = await asyncio.to_thread(list, all_messages_query.stream()) # type: ignore
+        current_count = len(all_message_snapshots)
+
+        if current_count > config.MAX_HISTORY_MESSAGES:
+            num_to_delete = current_count - config.MAX_HISTORY_MESSAGES
+            logger.info(f"GS: Chat history for user {user_id}, type '{history_type}' exceeds limit ({current_count}/{config.MAX_HISTORY_MESSAGES}). Deleting {num_to_delete} oldest messages.")
+
+            # The snapshots are already ordered by timestamp ASC, so the first `num_to_delete` are the oldest.
+            docs_to_delete = all_message_snapshots[:num_to_delete]
+
+            # Deleting documents one by one. Batched writes would be more efficient.
+            # For simplicity, individual deletes are used here.
+            # Firestore batch size limit is 500 operations.
+            batch = db.batch()
+            deleted_count = 0
+            for doc_snapshot in docs_to_delete:
+                batch.delete(doc_snapshot.reference)
+                deleted_count +=1
+                if deleted_count % 499 == 0: # Commit batch if it's getting full (Firestore limit 500)
+                    logger.info(f"GS: Committing a batch of {deleted_count} message deletions for user {user_id}, type '{history_type}'.")
+                    await asyncio.to_thread(batch.commit)
+                    batch = db.batch() # Start a new batch
+            
+            if deleted_count % 499 != 0: # Commit any remaining operations in the batch
+                 await asyncio.to_thread(batch.commit)
+            
+            logger.info(f"GS: Successfully deleted {deleted_count} oldest messages for user {user_id}, type '{history_type}'.")
+        return True
+
+    except Exception as e:
+        logger.error(f"GS: Error adding/trimming chat message for user {user_id}, type '{history_type}': {e}", exc_info=True)
+        return False
+
 # === Calendar Access Requests ===
 
 async def add_calendar_access_request(

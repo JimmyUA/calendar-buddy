@@ -84,13 +84,19 @@ async def _handle_general_chat(update: Update, context: ContextTypes.DEFAULT_TYP
     logger.info(f"Handling GENERAL_CHAT for user {user_id} with history")
 
     # 1. Retrieve or initialize history from user_data
-    # user_data is a dict unique to each user in each chat
-    if 'llm_history' not in context.user_data:
-        context.user_data['llm_history'] = []
-    history: list[dict] = context.user_data['llm_history']
+    # Old in-memory history:
+    # if 'llm_history' not in context.user_data:
+    #     context.user_data['llm_history'] = []
+    # history: list[dict] = context.user_data['llm_history']
+
+    # Load history from Firestore
+    history = await gs.get_chat_history(user_id, "general")
+    logger.debug(f"General Chat: Loaded {len(history)} messages from Firestore for user {user_id}")
 
     # 2. Add current user message to history (using the simple structure for storage)
     history.append({'role': 'user', 'content': text})
+    # Save user message to Firestore
+    await gs.add_chat_message(user_id, 'user', text, "general")
 
     # 3. Call LLM service with history
     response_text = await llm_service.get_chat_response(history)  # Pass the history
@@ -100,19 +106,23 @@ async def _handle_general_chat(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text(response_text)
         # Add bot's response to history
         history.append({'role': 'model', 'content': response_text})
+        # Save bot response to Firestore
+        await gs.add_chat_message(user_id, 'model', response_text, "general")
     else:
         # Handle LLM failure or blocked response
         await update.message.reply_text("Sorry, I couldn't process that chat message right now.")
         # Remove the last user message from history if the bot failed to respond
+        # Note: With Firestore, this local pop() won't affect stored history.
+        # The user message was already saved. This is a transient adjustment for the current interaction.
         if history and history[-1]['role'] == 'user':
             history.pop()
 
-    # 5. Trim history to MAX_HISTORY_MESSAGES (e.g., 20 messages for 10 turns)
-    if len(history) > MAX_HISTORY_MESSAGES:
-        logger.debug(f"Trimming history for user {user_id} from {len(history)} to {MAX_HISTORY_MESSAGES}")
-        # Keep the most recent messages
-        context.user_data['llm_history'] = history[-MAX_HISTORY_MESSAGES:]
-        # Alternative: history = history[-MAX_HISTORY_MESSAGES:] # Reassign if not using user_data directly
+    # 5. Trim history - This is now handled by add_chat_message in Firestore
+    # if len(history) > MAX_HISTORY_MESSAGES:
+    #     logger.debug(f"Trimming history for user {user_id} from {len(history)} to {MAX_HISTORY_MESSAGES}")
+    #     # Keep the most recent messages
+    #     context.user_data['llm_history'] = history[-MAX_HISTORY_MESSAGES:]
+    #     # Alternative: history = history[-MAX_HISTORY_MESSAGES:] # Reassign if not using user_data directly
 
 
 async def _handle_calendar_summary(update: Update, context: ContextTypes.DEFAULT_TYPE, parameters: dict):
@@ -692,12 +702,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # return
 
     # 3. Retrieve/Initialize conversation history from context.user_data
-    if 'lc_history' not in context.user_data:
-        context.user_data['lc_history'] = []
-    chat_history: list[dict] = context.user_data['lc_history']  # Stores {'role': '...', 'content': '...'}
+    # Old in-memory history:
+    # if 'lc_history' not in context.user_data:
+    #     context.user_data['lc_history'] = []
+    # chat_history: list[dict] = context.user_data['lc_history']  # Stores {'role': '...', 'content': '...'}
+    
+    # Load history from Firestore
+    chat_history = await gs.get_chat_history(user_id, "lc")
+    logger.debug(f"Agent Handler: Loaded {len(chat_history)} messages from Firestore for user {user_id}")
 
-    # Add current user message to simple history list
+    # Add current user message to simple history list (for agent context)
     chat_history.append({'role': 'user', 'content': text})
+    # Save user message to Firestore
+    await gs.add_chat_message(user_id, 'user', text, "lc")
 
     # 4. Initialize Agent Executor (with user context and history)
     try:
@@ -784,10 +801,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     )
     if agent_response and "error" not in agent_response.lower():  # Avoid saving error messages as model response
         chat_history.append({'role': 'model', 'content': agent_response})
+        # Save agent response to Firestore
+        await gs.add_chat_message(user_id, 'model', agent_response, "lc")
 
-    # 7. Trim history
-    if len(chat_history) > config.MAX_HISTORY_MESSAGES:
-        context.user_data['lc_history'] = chat_history[-config.MAX_HISTORY_MESSAGES:]
+    # 7. Trim history - This is now handled by add_chat_message in Firestore
+    # if len(chat_history) > config.MAX_HISTORY_MESSAGES:
+    #     context.user_data['lc_history'] = chat_history[-config.MAX_HISTORY_MESSAGES:]
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles button presses from inline keyboards."""
