@@ -11,7 +11,7 @@ class ShowGroceryListToolInput(BaseModel): # Optional, but good practice for con
 
 class ShowGroceryListTool(BaseTool):
     name: str = "show_grocery_list"
-    description: str = "Shows all items currently on the user's grocery list."
+    description: str = "Shows all items currently on the user's primary grocery list."
     args_schema: Type[BaseModel] = ShowGroceryListToolInput
     user_id: int
     user_timezone_str: str # Not used, but part of the pattern
@@ -19,13 +19,15 @@ class ShowGroceryListTool(BaseTool):
     def _run(self) -> str:
         logger.info(f"ShowGroceryListTool: Called for user {self.user_id}")
         try:
-            grocery_list = gs.get_grocery_list(self.user_id)
-            if grocery_list is None:
-                return "Error: Could not retrieve the grocery list at the moment."
-            elif not grocery_list:
-                return "Your grocery list is currently empty."
+            # gs.get_grocery_list is expected to return items from the user's owned list.
+            grocery_list_items = gs.get_grocery_list(str(self.user_id)) # user_id converted to str
+            if grocery_list_items is None:
+                # This condition might indicate an actual error in service layer if it's not supposed to return None for "no list found"
+                return "Error: Could not retrieve your primary grocery list at the moment."
+            elif not grocery_list_items:
+                return "Your primary grocery list is currently empty."
             else:
-                return f"Your grocery list: {', '.join(grocery_list)}."
+                return f"Your primary grocery list contains: {', '.join(grocery_list_items)}."
         except Exception as e:
             logger.error(f"Error in ShowGroceryListTool for user {self.user_id}: {e}", exc_info=True)
             return "An unexpected error occurred while trying to show the grocery list."

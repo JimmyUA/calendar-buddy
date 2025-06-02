@@ -11,7 +11,7 @@ class ClearGroceryListToolInput(BaseModel): # Optional
 
 class ClearGroceryListTool(BaseTool):
     name: str = "clear_grocery_list"
-    description: str = "Clears all items from the user's grocery list. Use with caution as this action is irreversible."
+    description: str = "Clears all items from the user's primary grocery list. Use with caution as this action is irreversible."
     args_schema: Type[BaseModel] = ClearGroceryListToolInput
     user_id: int
     user_timezone_str: str # Not used
@@ -19,10 +19,13 @@ class ClearGroceryListTool(BaseTool):
     def _run(self) -> str:
         logger.info(f"ClearGroceryListTool: Called for user {self.user_id}")
         try:
-            if gs.delete_grocery_list(self.user_id):
-                return "Successfully cleared your grocery list."
+            # Call clear_grocery_list_items, passing user_id as string and list_id=None for owned list
+            if gs.clear_grocery_list_items(str(self.user_id), list_id=None):
+                return "Successfully cleared items from your primary grocery list."
             else:
-                return "Failed to clear the grocery list due to a service error."
+                # This could mean no owned list was found, or an error occurred.
+                # gs.clear_grocery_list_items logs details.
+                return "Failed to clear items from the grocery list. You might not have an owned list or a service error occurred."
         except Exception as e:
             logger.error(f"Error in ClearGroceryListTool for user {self.user_id}: {e}", exc_info=True)
             return "An unexpected error occurred while trying to clear the grocery list."

@@ -28,7 +28,7 @@ class AddGroceryItemTool(BaseTool):
             return "Input error: No valid items provided after parsing. Please provide items like 'milk, eggs'."
 
         try:
-            if gs.add_to_grocery_list(self.user_id, item_list):
+            if gs.add_to_grocery_list(str(self.user_id), item_list): # user_id converted to str
                 return f"Successfully added: {', '.join(item_list)} to your grocery list."
             else:
                 return "Failed to add items to the grocery list due to a service error."

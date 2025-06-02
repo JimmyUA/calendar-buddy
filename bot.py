@@ -102,6 +102,7 @@ def main() -> None:
     application.add_handler(CommandHandler("glist_add", handlers.glist_add))
     application.add_handler(CommandHandler("glist_show", handlers.glist_show))
     application.add_handler(CommandHandler("glist_clear", handlers.glist_clear))
+    application.add_handler(CommandHandler("glist_share", handlers.glist_share_start)) # New grocery list share command
 
     # Message Handler (for natural language processing)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.handle_message))

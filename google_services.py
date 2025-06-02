@@ -24,7 +24,8 @@ from google.api_core.exceptions import NotFound
 from pytz.exceptions import UnknownTimeZoneError
 
 import config # Import our config
-from models import CalendarAccessRequest # Import the Pydantic model
+from models import CalendarAccessRequest, GroceryList, GroceryListShareRequest # Import the Pydantic models
+from google.cloud.firestore import SERVER_TIMESTAMP # Explicit import for clarity
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,9 @@ FS_COLLECTION_GROCERY_LISTS = db.collection(config.FS_COLLECTION_GROCERY_LISTS) 
 PENDING_EVENTS_COLLECTION = db.collection(config.FS_COLLECTION_PENDING_EVENTS) if db else None
 PENDING_DELETIONS_COLLECTION = db.collection(config.FS_COLLECTION_PENDING_DELETIONS) if db else None
 CALENDAR_ACCESS_REQUESTS_COLLECTION = db.collection(config.FS_COLLECTION_CALENDAR_ACCESS_REQUESTS) if db else None
+# Note: FS_COLLECTION_GROCERY_LISTS is already defined from config, assuming it's 'grocery_lists'
+# If not, it should be: GROCERY_LISTS_COLLECTION = db.collection('grocery_lists') if db else None
+GROCERY_LIST_SHARE_REQUESTS_COLLECTION = db.collection('grocery_list_share_requests') if db else None # New collection for share requests
 
 
 # === Pending Event Management (Firestore) ===
@@ -549,67 +553,546 @@ async def delete_calendar_event(user_id: int, event_id: str) -> tuple[bool, str]
 
 # === Grocery List Management ===
 
-async def get_grocery_list(user_id: int) -> list[str] | None:
-    """Retrieves the user's grocery list from Firestore."""
-    if not FS_COLLECTION_GROCERY_LISTS:
-        logger.error("GS: Firestore FS_COLLECTION_GROCERY_LISTS unavailable for get_grocery_list.")
+# Note: The existing get_grocery_list, add_to_grocery_list, and delete_grocery_list
+# functions are being refactored to support multiple lists, ownership, and sharing.
+# Their old implementations are commented out below.
+
+# async def get_grocery_list(user_id: int) -> list[str] | None:
+#     """Retrieves the user's grocery list from Firestore."""
+#     if not FS_COLLECTION_GROCERY_LISTS:
+#         logger.error("GS: Firestore FS_COLLECTION_GROCERY_LISTS unavailable for get_grocery_list.")
+#         return None
+#     user_doc_id = str(user_id)
+#     doc_ref = FS_COLLECTION_GROCERY_LISTS.document(user_doc_id) # OLD: Assumes user_id is doc_id
+#     try:
+#         snapshot = await asyncio.to_thread(doc_ref.get)
+#         if snapshot.exists:
+#             data = snapshot.to_dict() # type: ignore
+#             items = data.get('items') # type: ignore
+#             if isinstance(items, list):
+#                 logger.info(f"GS: Retrieved grocery list for user {user_id} with {len(items)} items.")
+#                 return items
+#             else:
+#                 logger.error(f"GS: 'items' field is not a list for user {user_id} in grocery list. Found: {type(items)}")
+#                 return None # Or an empty list if preferred for this specific error
+#         else:
+#             logger.info(f"GS: No grocery list document found for user {user_id}. Returning empty list.")
+#             return [] # Return empty list if document doesn't exist
+#     except Exception as e:
+#         logger.error(f"GS: Error fetching grocery list for user {user_id}: {e}", exc_info=True)
+#         return None
+
+# async def add_to_grocery_list(user_id: int, items_to_add: list[str]) -> bool:
+#     """Adds items to the user's grocery list in Firestore."""
+#     if not FS_COLLECTION_GROCERY_LISTS:
+#         logger.error("GS: Firestore FS_COLLECTION_GROCERY_LISTS unavailable for add_to_grocery_list.")
+#         return False
+#     if not items_to_add: # Nothing to add
+#         logger.info("GS: No items provided to add_to_grocery_list.")
+#         return True # Or False, depending on desired behavior for empty input
+#
+#     user_doc_id = str(user_id)
+#     doc_ref = FS_COLLECTION_GROCERY_LISTS.document(user_doc_id) # OLD: Assumes user_id is doc_id
+#     try:
+#         # Using set with merge=True and ArrayUnion to add/update items
+#         # This old implementation also doesn't handle created_at/updated_at for the list itself.
+#         await asyncio.to_thread(doc_ref.set, {'items': firestore.ArrayUnion(items_to_add)}, merge=True)
+#         logger.info(f"GS: Added/Updated {len(items_to_add)} items to grocery list for user {user_id}.")
+#         return True
+#     except Exception as e:
+#         logger.error(f"GS: Failed to add items to grocery list for user {user_id}: {e}", exc_info=True)
+#         return False
+
+# async def delete_grocery_list(user_id: int) -> bool:
+#     """Deletes the user's entire grocery list from Firestore."""
+#     if not FS_COLLECTION_GROCERY_LISTS:
+#         logger.error("GS: Firestore FS_COLLECTION_GROCERY_LISTS unavailable for delete_grocery_list.")
+#         return False
+#     user_doc_id = str(user_id)
+#     doc_ref = FS_COLLECTION_GROCERY_LISTS.document(user_doc_id) # OLD: Assumes user_id is doc_id
+#     try:
+#         # delete() does not raise an error if the document does not exist.
+#         await asyncio.to_thread(doc_ref.delete)
+#         logger.info(f"GS: Attempted deletion of grocery list for user {user_id}.")
+#         # To confirm it was deleted, we could try a get(), but for this function,
+#         # simply calling delete is often sufficient and idempotent.
+#         return True
+#     except Exception as e:
+#         logger.error(f"GS: Error deleting grocery list for user {user_id}: {e}", exc_info=True)
+#         return False
+
+# --- NEW/REVISED Grocery List Functions ---
+
+async def create_grocery_list(user_id: str, initial_items: list[str] = None) -> str | None:
+    """
+    Creates a new grocery list document with owner_id set to user_id.
+    Returns the ID of the newly created list.
+    """
+    if not FS_COLLECTION_GROCERY_LISTS: # Uses existing collection from config
+        logger.error("GS: Firestore FS_COLLECTION_GROCERY_LISTS unavailable for create_grocery_list.")
         return None
-    user_doc_id = str(user_id)
-    doc_ref = FS_COLLECTION_GROCERY_LISTS.document(user_doc_id)
+    
+    new_list_data = GroceryList(
+        owner_id=user_id,
+        items=initial_items if initial_items else [],
+        shared_with=[]
+        # created_at and updated_at will be set by Firestore
+    )
+    
+    data_to_store = new_list_data.model_dump(exclude_none=True)
+    data_to_store['created_at'] = SERVER_TIMESTAMP
+    data_to_store['updated_at'] = SERVER_TIMESTAMP
+
     try:
-        snapshot = await asyncio.to_thread(doc_ref.get)
-        if snapshot.exists:
-            data = snapshot.to_dict() # type: ignore
-            items = data.get('items') # type: ignore
-            if isinstance(items, list):
-                logger.info(f"GS: Retrieved grocery list for user {user_id} with {len(items)} items.")
-                return items
-            else:
-                logger.error(f"GS: 'items' field is not a list for user {user_id} in grocery list. Found: {type(items)}")
-                return None # Or an empty list if preferred for this specific error
-        else:
-            logger.info(f"GS: No grocery list document found for user {user_id}. Returning empty list.")
-            return [] # Return empty list if document doesn't exist
+        # add() returns a tuple (timestamp, document_reference)
+        write_result = await asyncio.to_thread(FS_COLLECTION_GROCERY_LISTS.add, data_to_store)
+        list_id = write_result[1].id # Extract ID from DocumentReference
+        logger.info(f"GS: Created new grocery list with ID '{list_id}' for owner '{user_id}'.")
+        return list_id
     except Exception as e:
-        logger.error(f"GS: Error fetching grocery list for user {user_id}: {e}", exc_info=True)
+        logger.error(f"GS: Failed to create grocery list for user {user_id}: {e}", exc_info=True)
         return None
 
-async def add_to_grocery_list(user_id: int, items_to_add: list[str]) -> bool:
-    """Adds items to the user's grocery list in Firestore."""
+async def get_user_owned_grocery_list_doc(user_id: str) -> firestore.DocumentSnapshot | None:
+    """
+    Helper to get the first grocery list document owned by user_id.
+    Returns the DocumentSnapshot if found, else None.
+    """
+    if not FS_COLLECTION_GROCERY_LISTS:
+        logger.error("GS: Firestore FS_COLLECTION_GROCERY_LISTS unavailable for get_user_owned_grocery_list_doc.")
+        return None
+    try:
+        query = FS_COLLECTION_GROCERY_LISTS.where(filter=FieldFilter("owner_id", "==", user_id)).limit(1)
+        snapshots = await asyncio.to_thread(list, query.stream())
+        if snapshots:
+            logger.debug(f"GS: Found owned grocery list for user {user_id} with ID {snapshots[0].id}.")
+            return snapshots[0]
+        logger.debug(f"GS: No owned grocery list found for user {user_id}.")
+        return None
+    except Exception as e:
+        logger.error(f"GS: Error fetching owned grocery list for user {user_id}: {e}", exc_info=True)
+        return None
+
+async def get_grocery_list_by_id(list_id: str) -> dict | None:
+    """Retrieves a specific grocery list by its document ID."""
+    if not FS_COLLECTION_GROCERY_LISTS:
+        logger.error("GS: Firestore FS_COLLECTION_GROCERY_LISTS unavailable for get_grocery_list_by_id.")
+        return None
+    try:
+        doc_ref = FS_COLLECTION_GROCERY_LISTS.document(list_id)
+        snapshot = await asyncio.to_thread(doc_ref.get)
+        if snapshot.exists:
+            list_data = snapshot.to_dict()
+            if list_data: # Ensure to_dict() returned something
+                 list_data['id'] = snapshot.id # Add document ID to the dict
+            logger.info(f"GS: Retrieved grocery list with ID '{list_id}'.")
+            return list_data
+        logger.warning(f"GS: Grocery list with ID '{list_id}' not found.")
+        return None
+    except Exception as e:
+        logger.error(f"GS: Error fetching grocery list ID '{list_id}': {e}", exc_info=True)
+        return None
+
+async def add_to_grocery_list(user_id: str, items_to_add: list[str]) -> bool:
+    """
+    Adds items to the user's owned grocery list.
+    If no owned list exists, creates one with the items.
+    If an owned list exists, adds items to it.
+    """
     if not FS_COLLECTION_GROCERY_LISTS:
         logger.error("GS: Firestore FS_COLLECTION_GROCERY_LISTS unavailable for add_to_grocery_list.")
         return False
-    if not items_to_add: # Nothing to add
+    if not items_to_add:
         logger.info("GS: No items provided to add_to_grocery_list.")
-        return True # Or False, depending on desired behavior for empty input
+        return True # Operation is vacuously successful as no items needed to be added.
 
-    user_doc_id = str(user_id)
-    doc_ref = FS_COLLECTION_GROCERY_LISTS.document(user_doc_id)
-    try:
-        # Using set with merge=True and ArrayUnion to add/update items
-        await asyncio.to_thread(doc_ref.set, {'items': firestore.ArrayUnion(items_to_add)}, merge=True)
-        logger.info(f"GS: Added/Updated {len(items_to_add)} items to grocery list for user {user_id}.")
-        return True
-    except Exception as e:
-        logger.error(f"GS: Failed to add items to grocery list for user {user_id}: {e}", exc_info=True)
-        return False
+    owned_list_snapshot = await get_user_owned_grocery_list_doc(user_id)
 
-async def delete_grocery_list(user_id: int) -> bool:
-    """Deletes the user's entire grocery list from Firestore."""
+    if owned_list_snapshot and owned_list_snapshot.reference:
+        list_ref = owned_list_snapshot.reference
+        logger.info(f"GS: Adding items to existing owned list {list_ref.id} for user {user_id}.")
+        try:
+            update_data = {
+                'items': firestore.ArrayUnion(items_to_add),
+                'updated_at': SERVER_TIMESTAMP
+            }
+            await asyncio.to_thread(list_ref.update, update_data)
+            logger.info(f"GS: Added {len(items_to_add)} items to grocery list {list_ref.id} for user {user_id}.")
+            return True
+        except Exception as e:
+            logger.error(f"GS: Failed to add items to grocery list {list_ref.id} for user {user_id}: {e}", exc_info=True)
+            return False
+    else:
+        logger.info(f"GS: No owned list found for user {user_id}. Creating a new one with the items.")
+        new_list_id = await create_grocery_list(user_id, initial_items=items_to_add)
+        if new_list_id:
+            # Items were added during creation, created_at/updated_at handled by create_grocery_list.
+            return True
+        else:
+            logger.error(f"GS: Failed to create a new list for user {user_id} while trying to add items.")
+            return False
+
+async def get_grocery_list(user_id: str) -> list[str] | None:
+    """
+    Retrieves items from the user's first found owned grocery list.
+    Returns a list of item strings, or an empty list if no owned list or items are found.
+    Returns None on error.
+    """
+    owned_list_snapshot = await get_user_owned_grocery_list_doc(user_id)
+    if owned_list_snapshot and owned_list_snapshot.exists:
+        data = owned_list_snapshot.to_dict()
+        if data: # Check if data is not None
+            items = data.get('items', [])
+            if isinstance(items, list):
+                logger.info(f"GS: Retrieved {len(items)} items from owned list {owned_list_snapshot.id} for user {user_id}.")
+                return items
+            else:
+                logger.error(f"GS: 'items' field is not a list for owned list {owned_list_snapshot.id}. Found: {type(items)}")
+                return [] # Malformed items field
+        else:
+            logger.warning(f"GS: Owned list {owned_list_snapshot.id} for user {user_id} has no data after to_dict().")
+            return [] # Document exists but no data
+    logger.info(f"GS: No owned grocery list found for user {user_id}, or list is empty/malformed for get_grocery_list.")
+    return [] # Default to empty list if no list or items found
+
+async def clear_grocery_list_items(user_id: str, list_id: str = None) -> bool:
+    """
+    Clears items from a specific grocery list if list_id is provided and user has access,
+    or from the user's owned list if list_id is not provided.
+    Does not delete the list document itself.
+    """
     if not FS_COLLECTION_GROCERY_LISTS:
-        logger.error("GS: Firestore FS_COLLECTION_GROCERY_LISTS unavailable for delete_grocery_list.")
+        logger.error("GS: Firestore FS_COLLECTION_GROCERY_LISTS unavailable for clear_grocery_list_items.")
         return False
-    user_doc_id = str(user_id)
-    doc_ref = FS_COLLECTION_GROCERY_LISTS.document(user_doc_id)
+
+    list_doc_ref = None
+    list_doc_snapshot_id = "unknown" # For logging
+
+    if list_id:
+        doc_ref_temp = FS_COLLECTION_GROCERY_LISTS.document(list_id)
+        list_doc_snapshot_id = list_id # For logging
+        snapshot_temp = await asyncio.to_thread(doc_ref_temp.get)
+        if not snapshot_temp.exists:
+            logger.warning(f"GS: List {list_id} not found for clearing items.")
+            return False
+        
+        list_data = snapshot_temp.to_dict()
+        if not list_data:
+            logger.error(f"GS: List {list_id} has no data. Cannot clear items.")
+            return False
+            
+        # Check permission: user must be owner or in shared_with
+        if list_data.get('owner_id') != user_id and user_id not in list_data.get('shared_with', []):
+            logger.warning(f"GS: User {user_id} does not have permission to clear items from list {list_id}.")
+            return False
+        list_doc_ref = doc_ref_temp
+    else:
+        # No list_id provided, operate on user's owned list
+        owned_list_snapshot = await get_user_owned_grocery_list_doc(user_id)
+        if not owned_list_snapshot or not owned_list_snapshot.exists:
+            logger.info(f"GS: No owned grocery list found for user {user_id} to clear items from.")
+            return True # No list to clear, operation is vacuously successful
+        list_doc_ref = owned_list_snapshot.reference
+        list_doc_snapshot_id = owned_list_snapshot.id # For logging
+    
     try:
-        # delete() does not raise an error if the document does not exist.
-        await asyncio.to_thread(doc_ref.delete)
-        logger.info(f"GS: Attempted deletion of grocery list for user {user_id}.")
-        # To confirm it was deleted, we could try a get(), but for this function,
-        # simply calling delete is often sufficient and idempotent.
+        update_data = {
+            'items': [], # Clear the items array
+            'updated_at': SERVER_TIMESTAMP
+        }
+        await asyncio.to_thread(list_doc_ref.update, update_data)
+        logger.info(f"GS: Successfully cleared items from grocery list {list_doc_snapshot_id}.")
         return True
     except Exception as e:
-        logger.error(f"GS: Error deleting grocery list for user {user_id}: {e}", exc_info=True)
+        logger.error(f"GS: Error clearing items from grocery list {list_doc_snapshot_id}: {e}", exc_info=True)
+        return False
+
+async def permanently_delete_grocery_list(owner_user_id: str, list_id: str) -> bool:
+    """
+    Permanently deletes a grocery list document. Restricted to the owner.
+    """
+    if not FS_COLLECTION_GROCERY_LISTS:
+        logger.error("GS: Firestore FS_COLLECTION_GROCERY_LISTS unavailable for permanently_delete_grocery_list.")
+        return False
+
+    doc_ref = FS_COLLECTION_GROCERY_LISTS.document(list_id)
+    try:
+        snapshot = await asyncio.to_thread(doc_ref.get)
+        if not snapshot.exists:
+            logger.warning(f"GS: Grocery list {list_id} not found for deletion.")
+            return False # Or True, if idempotent deletion is preferred
+
+        list_data = snapshot.to_dict()
+        if not list_data or list_data.get('owner_id') != owner_user_id:
+            logger.warning(f"GS: User {owner_user_id} is not the owner of list {list_id} or list data is missing. Deletion denied.")
+            return False
+
+        await asyncio.to_thread(doc_ref.delete)
+        logger.info(f"GS: Successfully deleted grocery list {list_id} owned by {owner_user_id}.")
+        return True
+    except Exception as e:
+        logger.error(f"GS: Error deleting grocery list {list_id}: {e}", exc_info=True)
+        return False
+
+async def get_user_owned_grocery_lists(user_id: str) -> list[dict]:
+    """Retrieves all grocery lists owned by user_id. Returns list of list data dicts, each including its ID."""
+    if not FS_COLLECTION_GROCERY_LISTS:
+        logger.error("GS: Firestore FS_COLLECTION_GROCERY_LISTS unavailable for get_user_owned_grocery_lists.")
+        return []
+    try:
+        query = FS_COLLECTION_GROCERY_LISTS.where(filter=FieldFilter("owner_id", "==", user_id))
+        snapshots = await asyncio.to_thread(list, query.stream())
+        lists = []
+        for snapshot in snapshots:
+            list_data = snapshot.to_dict()
+            if list_data: # Ensure data exists
+                list_data['id'] = snapshot.id # Add document ID to the dict
+                lists.append(list_data)
+        logger.info(f"GS: Found {len(lists)} owned grocery lists for user {user_id}.")
+        return lists
+    except Exception as e:
+        logger.error(f"GS: Error fetching owned grocery lists for user {user_id}: {e}", exc_info=True)
+        return []
+
+async def get_shared_grocery_lists_for_user(user_id: str) -> list[dict]:
+    """Retrieves all grocery lists shared with user_id. Each list dict includes its ID."""
+    if not FS_COLLECTION_GROCERY_LISTS:
+        logger.error("GS: Firestore FS_COLLECTION_GROCERY_LISTS unavailable for get_shared_grocery_lists_for_user.")
+        return []
+    try:
+        query = FS_COLLECTION_GROCERY_LISTS.where(filter=FieldFilter("shared_with", "array_contains", user_id))
+        snapshots = await asyncio.to_thread(list, query.stream())
+        shared_lists = []
+        for snapshot in snapshots:
+            list_data = snapshot.to_dict()
+            if list_data: # Ensure data exists
+                list_data['id'] = snapshot.id # Add document ID
+                shared_lists.append(list_data)
+        logger.info(f"GS: Found {len(shared_lists)} lists shared with user {user_id}.")
+        return shared_lists
+    except Exception as e:
+        logger.error(f"GS: Error fetching shared grocery lists for user {user_id}: {e}", exc_info=True)
+        return []
+
+async def add_user_to_shared_list(list_id: str, target_user_id: str, sharing_user_id: str) -> bool:
+    """
+    Adds target_user_id to the shared_with array of the list_id.
+    Only the list owner (sharing_user_id) can perform this action.
+    """
+    if not FS_COLLECTION_GROCERY_LISTS:
+        logger.error("GS: Firestore FS_COLLECTION_GROCERY_LISTS unavailable for add_user_to_shared_list.")
+        return False
+
+    doc_ref = FS_COLLECTION_GROCERY_LISTS.document(list_id)
+    try:
+        snapshot = await asyncio.to_thread(doc_ref.get)
+        if not snapshot.exists:
+            logger.warning(f"GS: List {list_id} not found for sharing.")
+            return False
+
+        list_data = snapshot.to_dict()
+        if not list_data or list_data.get('owner_id') != sharing_user_id:
+            logger.warning(f"GS: User {sharing_user_id} is not the owner of list {list_id} or list data missing. Cannot add user to shared list.")
+            return False
+        
+        if target_user_id == list_data.get('owner_id'):
+            logger.info(f"GS: User {target_user_id} is the owner of list {list_id}, no need to add to shared_with.")
+            return True # Owner doesn't need to be in shared_with
+
+        if target_user_id in list_data.get('shared_with', []):
+            logger.info(f"GS: User {target_user_id} is already in the shared list {list_id}.")
+            return True # Already shared, consider it a success
+
+        update_data = {
+            'shared_with': firestore.ArrayUnion([target_user_id]),
+            'updated_at': SERVER_TIMESTAMP
+        }
+        await asyncio.to_thread(doc_ref.update, update_data)
+        logger.info(f"GS: User {target_user_id} added to shared list {list_id} by owner {sharing_user_id}.")
+        return True
+    except Exception as e:
+        logger.error(f"GS: Error adding user {target_user_id} to shared list {list_id}: {e}", exc_info=True)
+        return False
+
+async def remove_user_from_shared_list(list_id: str, target_user_id: str, unsharing_user_id: str) -> bool:
+    """
+    Removes target_user_id from the shared_with array of list_id.
+    Only the list owner or the user themselves can perform this action.
+    """
+    if not FS_COLLECTION_GROCERY_LISTS:
+        logger.error("GS: Firestore FS_COLLECTION_GROCERY_LISTS unavailable for remove_user_from_shared_list.")
+        return False
+
+    doc_ref = FS_COLLECTION_GROCERY_LISTS.document(list_id)
+    try:
+        snapshot = await asyncio.to_thread(doc_ref.get)
+        if not snapshot.exists:
+            logger.warning(f"GS: List {list_id} not found for unsharing.")
+            return False
+
+        list_data = snapshot.to_dict()
+        if not list_data:
+             logger.warning(f"GS: List {list_id} has no data. Cannot remove user from shared list.")
+             return False
+
+        is_owner = list_data.get('owner_id') == unsharing_user_id
+        is_self_removal = target_user_id == unsharing_user_id
+
+        if not (is_owner or is_self_removal):
+            logger.warning(f"GS: User {unsharing_user_id} does not have permission to remove {target_user_id} from list {list_id}.")
+            return False
+            
+        if target_user_id not in list_data.get('shared_with', []):
+            logger.info(f"GS: User {target_user_id} is not in the shared list {list_id} to begin with.")
+            return True # Not in list, consider it a success
+
+        update_data = {
+            'shared_with': firestore.ArrayRemove([target_user_id]),
+            'updated_at': SERVER_TIMESTAMP
+        }
+        await asyncio.to_thread(doc_ref.update, update_data)
+        logger.info(f"GS: User {target_user_id} removed from shared list {list_id} by {unsharing_user_id}.")
+        return True
+    except Exception as e:
+        logger.error(f"GS: Error removing user {target_user_id} from shared list {list_id}: {e}", exc_info=True)
+        return False
+
+# === Grocery List Sharing Request Functions ===
+
+async def create_grocery_list_share_request(
+    requester_id: str, requester_name: str, target_user_id: str, list_id: str
+) -> str | None:
+    """
+    Creates a new document in 'grocery_list_share_requests' collection.
+    Returns the ID of the share request document.
+    """
+    if not GROCERY_LIST_SHARE_REQUESTS_COLLECTION:
+        logger.error("GS: Firestore GROCERY_LIST_SHARE_REQUESTS_COLLECTION unavailable for create_grocery_list_share_request.")
+        return None
+
+    # Optional: Basic validation - Check if the target user actually owns the list_id.
+    # This adds a read operation before creating the request.
+    try:
+        list_doc = await get_grocery_list_by_id(list_id)
+        if not list_doc or list_doc.get('owner_id') != target_user_id:
+            logger.warning(f"GS: Share request creation denied. List {list_id} not found or not owned by target {target_user_id}.")
+            return None
+        # Optional: Check if already shared or a pending request exists.
+        # For simplicity, this is omitted for now but would be good for production.
+
+    except Exception as e:
+        logger.error(f"GS: Pre-check failed for creating share request for list {list_id}: {e}", exc_info=True)
+        return None # Or proceed without pre-check depending on desired robustness
+
+    request_model = GroceryListShareRequest(
+        requester_id=requester_id,
+        requester_name=requester_name,
+        target_user_id=target_user_id,
+        list_id=list_id,
+        status="pending"
+        # request_timestamp will be SERVER_TIMESTAMP
+    )
+    data_to_store = request_model.model_dump(exclude_none=True)
+    data_to_store['request_timestamp'] = SERVER_TIMESTAMP
+
+    try:
+        write_result = await asyncio.to_thread(GROCERY_LIST_SHARE_REQUESTS_COLLECTION.add, data_to_store)
+        request_doc_id = write_result[1].id # Extract ID from DocumentReference
+        logger.info(f"GS: Grocery list share request from {requester_id} to {target_user_id} for list {list_id} stored with ID: {request_doc_id}")
+        return request_doc_id
+    except Exception as e:
+        logger.error(f"GS: Failed to create grocery list share request: {e}", exc_info=True)
+        return None
+
+async def get_grocery_list_share_request(request_id: str) -> dict | None:
+    """Retrieves a specific share request by its document ID, including its ID."""
+    if not GROCERY_LIST_SHARE_REQUESTS_COLLECTION:
+        logger.error("GS: Firestore GROCERY_LIST_SHARE_REQUESTS_COLLECTION unavailable for get_grocery_list_share_request.")
+        return None
+    try:
+        doc_ref = GROCERY_LIST_SHARE_REQUESTS_COLLECTION.document(request_id)
+        snapshot = await asyncio.to_thread(doc_ref.get)
+        if snapshot.exists:
+            request_data = snapshot.to_dict()
+            if request_data: # Ensure data exists
+                request_data['id'] = snapshot.id # Add document ID
+            logger.info(f"GS: Retrieved grocery list share request with ID: {request_id}")
+            return request_data
+        logger.warning(f"GS: Grocery list share request with ID: {request_id} not found.")
+        return None
+    except Exception as e:
+        logger.error(f"GS: Error fetching grocery list share request {request_id}: {e}", exc_info=True)
+        return None
+
+async def update_grocery_list_share_request_status(
+    request_id: str, status: str, respondee_user_id: str
+) -> bool:
+    """
+    Updates the status of the request (e.g., "approved", "denied").
+    Ensures respondee_user_id matches the target_user_id in the request.
+    If "approved", calls add_user_to_shared_list.
+    """
+    if not GROCERY_LIST_SHARE_REQUESTS_COLLECTION:
+        logger.error("GS: Firestore GROCERY_LIST_SHARE_REQUESTS_COLLECTION unavailable for update_grocery_list_share_request_status.")
+        return False
+
+    request_doc_ref = GROCERY_LIST_SHARE_REQUESTS_COLLECTION.document(request_id)
+    try:
+        snapshot = await asyncio.to_thread(request_doc_ref.get)
+        if not snapshot.exists:
+            logger.warning(f"GS: Share request {request_id} not found for status update.")
+            return False
+
+        request_data = snapshot.to_dict()
+        if not request_data:
+            logger.error(f"GS: Share request {request_id} has no data. Cannot update status.")
+            return False
+
+        if request_data.get('target_user_id') != respondee_user_id:
+            logger.warning(f"GS: User {respondee_user_id} is not authorized to respond to share request {request_id} (target: {request_data.get('target_user_id')}).")
+            return False
+        
+        current_status = request_data.get('status')
+        if current_status != 'pending':
+            logger.warning(f"GS: Share request {request_id} is already responded to (status: {current_status}). Cannot update to {status}.")
+            # Consider returning True if the status is already the desired status, making it idempotent.
+            # For now, strictly disallow re-processing.
+            return False
+
+        valid_statuses = ["approved", "denied", "expired"] # Add other valid statuses if needed
+        if status not in valid_statuses:
+            logger.error(f"GS: Invalid status '{status}' for share request {request_id}.")
+            return False
+
+        update_data = {
+            'status': status,
+            'response_timestamp': SERVER_TIMESTAMP
+        }
+        await asyncio.to_thread(request_doc_ref.update, update_data)
+        logger.info(f"GS: Updated grocery list share request {request_id} to status '{status}'.")
+
+        if status == "approved":
+            list_id = request_data.get('list_id')
+            requester_id = request_data.get('requester_id')
+            # The respondee_user_id is the owner of the list (target_user_id of the request)
+            if not list_id or not requester_id:
+                 logger.error(f"GS: list_id or requester_id missing in approved share request {request_id}. Cannot complete sharing.")
+                 # Consider setting status to 'error' or some other state.
+                 return False # Overall operation failed due to missing data in request.
+
+            shared_successfully = await add_user_to_shared_list(list_id, requester_id, respondee_user_id)
+            if not shared_successfully:
+                logger.error(f"GS: Failed to add user {requester_id} to list {list_id} after request {request_id} approval.")
+                # Potentially revert status or log for manual intervention.
+                # Setting status to an error state could be:
+                # await asyncio.to_thread(request_doc_ref.update, {'status': 'approval_failed_sharing', 'error_timestamp': SERVER_TIMESTAMP})
+                return False # Indicate overall operation failure
+        return True
+    except NotFound: 
+        logger.warning(f"GS: Share request {request_id} not found during status update (NotFound exception).")
+        return False
+    except Exception as e:
+        logger.error(f"GS: Failed to update status for share request {request_id}: {e}", exc_info=True)
         return False
 
 # === Chat History Management ===

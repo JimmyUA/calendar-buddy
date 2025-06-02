@@ -500,119 +500,201 @@ async def users_shared_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     from telegram import ReplyKeyboardRemove # Local import for clarity
     await update.message.reply_text("Processing your selection...", reply_markup=ReplyKeyboardRemove())
 
+    # --- Determine if this is for Calendar Access or Grocery List Sharing ---
+    calendar_access_request_id = context.user_data.get('select_user_request_id')
+    glist_share_request_id = context.user_data.get(GLIST_SHARE_SELECT_USER_REQUEST_ID_KEY)
 
-    if expected_request_id is None or received_request_id != expected_request_id:
-        logger.warning(
-            f"User {requester_id} triggered UsersShared with unexpected/expired request_id: "
-            f"Received {received_request_id}, expected {expected_request_id}."
+    if received_request_id == glist_share_request_id:
+        # --- Handle Grocery List Sharing ---
+        logger.info(f"User {requester_id} (as {requester_name}) is sharing a grocery list. KB Request ID: {received_request_id}")
+        list_id_to_share = context.user_data.get(GLIST_SHARE_LIST_ID_KEY)
+
+        context.user_data.pop(GLIST_SHARE_SELECT_USER_REQUEST_ID_KEY, None)
+        context.user_data.pop(GLIST_SHARE_LIST_ID_KEY, None)
+
+        if not update.message.users_shared.users:
+            logger.warning(f"User {requester_id} used user picker for glist_share but shared no users.")
+            await context.bot.send_message(chat_id=requester_id, text="No user was selected for grocery list sharing. Please try again.")
+            return
+
+        if not list_id_to_share:
+            logger.error(f"User {requester_id}: {GLIST_SHARE_LIST_ID_KEY} missing after user selection for glist_share.")
+            await context.bot.send_message(chat_id=requester_id, text="Something went wrong, I don't know which list to share. Please start over with /glist_share.")
+            return
+            
+        target_user_glist = update.message.users_shared.users[0]
+        target_user_id_glist = str(target_user_glist.user_id)
+        target_user_name_glist = target_user_glist.first_name or target_user_glist.username or f"User ID {target_user_id_glist}"
+
+        if target_user_id_glist == requester_id:
+            await context.bot.send_message(chat_id=requester_id, text="You cannot share a grocery list with yourself.")
+            return
+
+        # Create the grocery list share request
+        share_request_doc_id = await gs.create_grocery_list_share_request(
+            requester_id=requester_id,
+            requester_name=requester_name, # Full name or first name
+            target_user_id=target_user_id_glist,
+            list_id=list_id_to_share
         )
-        # Send message via context.bot as update.message might not be suitable for a new message here
-        await context.bot.send_message(chat_id=requester_id, text="This user selection is unexpected or has expired. Please try the /request_access command again.")
-        return
 
-    if not update.message.users_shared.users:
-        logger.warning(f"User {requester_id} used user picker but shared no users for request_id {received_request_id}.")
-        await context.bot.send_message(chat_id=requester_id, text="No user was selected. Please try again if you want to request access.")
-        # Clear data as the flow is aborted
-        context.user_data.pop('select_user_request_id', None)
-        context.user_data.pop('calendar_request_period', None)
-        return
+        if not share_request_doc_id:
+            await context.bot.send_message(chat_id=requester_id, text="Sorry, there was an internal error creating the share request. Please try again.")
+            return
 
-    target_user = update.message.users_shared.users[0]
-    target_user_id = str(target_user.user_id)
-    # Use target_user.first_name, and if not available, try target_user.username, then a generic fallback.
-    target_user_first_name = target_user.first_name or target_user.username or f"User ID {target_user_id}"
-
-
-    request_period_data = context.user_data.get('calendar_request_period')
-
-    # Clear temporary data now that we have the target user and period
-    context.user_data.pop('select_user_request_id', None)
-    context.user_data.pop('calendar_request_period', None)
-
-    if not request_period_data:
-        logger.error(f"User {requester_id}: calendar_request_period missing after user selection for target {target_user_id}.")
-        await context.bot.send_message(chat_id=requester_id, text="Something went wrong, I don't have the time period for your request. Please start over with /request_access.")
-        return
-
-    start_iso = request_period_data['start_iso']
-    end_iso = request_period_data['end_iso']
-    original_period_str = request_period_data['original']
-
-    if target_user_id == requester_id:
-        await context.bot.send_message(chat_id=requester_id, text="You cannot request calendar access from yourself. Please try again with a different user.")
-        return
-
-    logger.info(f"User {requester_id} selected target user {target_user_id} ({target_user_first_name}) for period '{original_period_str}'")
-
-    # Store Access Request in Firestore
-    request_doc_id = await gs.add_calendar_access_request( # MODIFIED
-        requester_id=requester_id,
-        requester_name=requester_name,
-        target_user_id=target_user_id,
-        start_time_iso=start_iso,
-        end_time_iso=end_iso
-    )
-
-    if not request_doc_id:
-        await context.bot.send_message(chat_id=requester_id, text="Sorry, there was an internal error trying to store your access request. Please try again later.")
-        return
-
-    # Inform Requester
-    await context.bot.send_message(
-        chat_id=requester_id,
-        text=f"Great! Your calendar access request for '<b>{html.escape(original_period_str)}</b>' "
-             f"has been sent to <b>{html.escape(target_user_first_name)}</b>."
-             f" (Request ID: `{request_doc_id}`)", # Added request ID for requester's reference
-        parse_mode=ParseMode.HTML
-    )
-
-    # Notify Target User
-    target_user_tz_str = await gs.get_user_timezone_str(int(target_user_id)) # MODIFIED # Fetch target's TZ for display
-    start_display_for_target = _format_iso_datetime_for_display(start_iso, target_user_tz_str)
-    end_display_for_target = _format_iso_datetime_for_display(end_iso, target_user_tz_str)
-
-    # Get target user's Telegram username if available (from the shared user object)
-    target_telegram_username = target_user.username or "N/A"
-
-
-    target_message = (
-        f"🔔 Calendar Access Request\n\n"
-        f"User <b>{html.escape(requester_name)}</b> (Telegram: @{requester_username or 'N/A'}) "
-        f"would like to view your calendar events for the period:\n"
-        f"<b>From:</b> {start_display_for_target}\n"
-        f"<b>To:</b>   {end_display_for_target}\n"
-        f"(Original request from user: \"<i>{html.escape(original_period_str)}</i>\")\n\n"
-        f"Do you approve this request?"
-    )
-
-    inline_keyboard = [
-        [
-            InlineKeyboardButton("✅ Approve Access", callback_data=f"approve_access_{request_doc_id}"),
-            InlineKeyboardButton("❌ Deny Access", callback_data=f"deny_access_{request_doc_id}")
-        ]
-    ]
-    inline_reply_markup = InlineKeyboardMarkup(inline_keyboard)
-
-    try:
+        # Inform Requester
         await context.bot.send_message(
-            chat_id=target_user_id,
-            text=target_message,
-            reply_markup=inline_reply_markup,
+            chat_id=requester_id,
+            text=f"Your request to share the grocery list has been sent to <b>{html.escape(target_user_name_glist)}</b>."
+                 f" (Share Request ID: `{share_request_doc_id}`)",
             parse_mode=ParseMode.HTML
         )
-        logger.info(f"Sent access request notification (ID: {request_doc_id}) to target user {target_user_id}.")
-    except Exception as e:
-        logger.error(f"Failed to send access request notification to target user {target_user_id} for request {request_doc_id}: {e}", exc_info=True)
-        # Inform requester
-        await context.bot.send_message(
-             chat_id=requester_id,
-             text=f"I've stored your request for <b>{html.escape(target_user_first_name)}</b> (Request ID: `{request_doc_id}`), "
-                  "but I couldn't send them a direct notification. This can happen if they haven't started a chat with me, "
-                  "or if they have blocked the bot. You might need to share the Request ID with them manually.",
-             parse_mode=ParseMode.HTML
+
+        # Notify Target User for Grocery List Sharing
+        glist_target_message = (
+            f"🔔 Grocery List Share Request\n\n"
+            f"User <b>{html.escape(requester_name)}</b> (Telegram: @{requester_username or 'N/A'}) "
+            f"wants to share their grocery list with you.\n\n"
+            f"Do you accept?"
         )
-        await gs.update_calendar_access_request_status(request_doc_id, "error_notifying_target") # MODIFIED
+        glist_inline_keyboard = [
+            [
+                InlineKeyboardButton("✅ Accept Share", callback_data=f"glist_accept_share_{share_request_doc_id}"),
+                InlineKeyboardButton("❌ Deny Share", callback_data=f"glist_deny_share_{share_request_doc_id}")
+            ]
+        ]
+        glist_inline_reply_markup = InlineKeyboardMarkup(glist_inline_keyboard)
+
+        try:
+            await context.bot.send_message(
+                chat_id=target_user_id_glist,
+                text=glist_target_message,
+                reply_markup=glist_inline_reply_markup,
+                parse_mode=ParseMode.HTML
+            )
+            logger.info(f"Sent grocery list share request notification (ID: {share_request_doc_id}) to target user {target_user_id_glist}.")
+        except Exception as e:
+            logger.error(f"Failed to send glist share notification to target {target_user_id_glist} for request {share_request_doc_id}: {e}", exc_info=True)
+            await context.bot.send_message(
+                chat_id=requester_id,
+                text=f"I've stored your share request for <b>{html.escape(target_user_name_glist)}</b> (Request ID: `{share_request_doc_id}`), "
+                     "but I couldn't send them a direct notification (they might need to start a chat with me or unblock the bot). "
+                     "You may need to share the Request ID with them manually.",
+                parse_mode=ParseMode.HTML
+            )
+            # Optionally update share request status to 'error_notifying_target'
+            await gs.update_grocery_list_share_request_status(share_request_doc_id, "error_notifying_target", target_user_id_glist)
+
+
+    elif received_request_id == calendar_access_request_id:
+        # --- Handle Calendar Access Request (existing logic) ---
+        logger.info(f"User {requester_id} (as {requester_name}) is requesting calendar access. KB Request ID: {received_request_id}")
+        if not update.message.users_shared.users:
+            logger.warning(f"User {requester_id} used user picker for calendar_access but shared no users.")
+            await context.bot.send_message(chat_id=requester_id, text="No user was selected for calendar access. Please try again.")
+            context.user_data.pop('select_user_request_id', None)
+            context.user_data.pop('calendar_request_period', None)
+            return
+
+        target_user_calendar = update.message.users_shared.users[0]
+        target_user_id_calendar = str(target_user_calendar.user_id)
+        target_user_name_calendar = target_user_calendar.first_name or target_user_calendar.username or f"User ID {target_user_id_calendar}"
+        
+        request_period_data = context.user_data.get('calendar_request_period')
+
+        context.user_data.pop('select_user_request_id', None)
+        context.user_data.pop('calendar_request_period', None)
+
+        if not request_period_data:
+            logger.error(f"User {requester_id}: calendar_request_period missing after user selection for target {target_user_id_calendar}.")
+            await context.bot.send_message(chat_id=requester_id, text="Something went wrong with calendar access, I don't have the time period. Please start over.")
+            return
+
+        start_iso = request_period_data['start_iso']
+        end_iso = request_period_data['end_iso']
+        original_period_str = request_period_data['original']
+
+        if target_user_id_calendar == requester_id:
+            await context.bot.send_message(chat_id=requester_id, text="You cannot request calendar access from yourself.")
+            return
+        
+        logger.info(f"User {requester_id} selected target user {target_user_id_calendar} ({target_user_name_calendar}) for calendar access period '{original_period_str}'")
+
+        calendar_request_doc_id = await gs.add_calendar_access_request(
+            requester_id=requester_id,
+            requester_name=requester_name,
+            target_user_id=target_user_id_calendar,
+            start_time_iso=start_iso,
+            end_time_iso=end_iso
+        )
+
+        if not calendar_request_doc_id:
+            await context.bot.send_message(chat_id=requester_id, text="Sorry, there was an internal error storing your calendar access request.")
+            return
+
+        await context.bot.send_message(
+            chat_id=requester_id,
+            text=f"Great! Your calendar access request for '<b>{html.escape(original_period_str)}</b>' "
+                 f"has been sent to <b>{html.escape(target_user_name_calendar)}</b>."
+                 f" (Request ID: `{calendar_request_doc_id}`)",
+            parse_mode=ParseMode.HTML
+        )
+
+        target_user_tz_str = await gs.get_user_timezone_str(int(target_user_id_calendar))
+        start_display_for_target = _format_iso_datetime_for_display(start_iso, target_user_tz_str)
+        end_display_for_target = _format_iso_datetime_for_display(end_iso, target_user_tz_str)
+        target_telegram_username = target_user_calendar.username or "N/A"
+
+        calendar_target_message = (
+            f"🔔 Calendar Access Request\n\n"
+            f"User <b>{html.escape(requester_name)}</b> (Telegram: @{requester_username or 'N/A'}) "
+            f"would like to view your calendar events for the period:\n"
+            f"<b>From:</b> {start_display_for_target}\n"
+            f"<b>To:</b>   {end_display_for_target}\n"
+            f"(Original request from user: \"<i>{html.escape(original_period_str)}</i>\")\n\n"
+            f"Do you approve this request?"
+        )
+        calendar_inline_keyboard = [
+            [
+                InlineKeyboardButton("✅ Approve Access", callback_data=f"approve_access_{calendar_request_doc_id}"),
+                InlineKeyboardButton("❌ Deny Access", callback_data=f"deny_access_{calendar_request_doc_id}")
+            ]
+        ]
+        calendar_inline_reply_markup = InlineKeyboardMarkup(calendar_inline_keyboard)
+
+        try:
+            await context.bot.send_message(
+                chat_id=target_user_id_calendar,
+                text=calendar_target_message,
+                reply_markup=calendar_inline_reply_markup,
+                parse_mode=ParseMode.HTML
+            )
+            logger.info(f"Sent calendar access request notification (ID: {calendar_request_doc_id}) to target user {target_user_id_calendar}.")
+        except Exception as e:
+            logger.error(f"Failed to send calendar access notification to target {target_user_id_calendar} for request {calendar_request_doc_id}: {e}", exc_info=True)
+            await context.bot.send_message(
+                chat_id=requester_id,
+                text=f"I've stored your calendar access request for <b>{html.escape(target_user_name_calendar)}</b> (Request ID: `{calendar_request_doc_id}`), "
+                     "but I couldn't send them a direct notification. You might need to share the Request ID manually.",
+                parse_mode=ParseMode.HTML
+            )
+            await gs.update_calendar_access_request_status(calendar_request_doc_id, "error_notifying_target")
+    
+    else:
+        # This case handles if received_request_id does not match any known active request flows
+        logger.warning(
+            f"User {requester_id} triggered UsersShared with an unrecognized or expired request_id: "
+            f"Received {received_request_id}. Expected calendar_access_id: {calendar_access_request_id} or glist_share_id: {glist_share_request_id}."
+        )
+        await context.bot.send_message(
+            chat_id=requester_id,
+            text="This user selection is unexpected or has expired. Please try your original command again (e.g., /request_access or /glist_share)."
+        )
+        # Clean up any potentially stale user_data keys, just in case
+        context.user_data.pop('select_user_request_id', None)
+        context.user_data.pop('calendar_request_period', None)
+        context.user_data.pop(GLIST_SHARE_SELECT_USER_REQUEST_ID_KEY, None)
+        context.user_data.pop(GLIST_SHARE_LIST_ID_KEY, None)
 
 
 async def connect_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -958,20 +1040,20 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif callback_data.startswith("deny_access_"):
         await query.answer() # Moved to the top
         request_id = callback_data.split("_")[-1]
-        logger.info(f"User {user_id} (target) attempts to deny access request {request_id}")
+        logger.info(f"User {user_id} (target) attempts to deny CALENDAR access request {request_id}")
         request_data = await gs.get_calendar_access_request(request_id) # MODIFIED
 
         if not request_data:
-            await query.edit_message_text("This access request was not found or may have expired.")
+            await query.edit_message_text("This calendar access request was not found or may have expired.")
             return
         if request_data.get('status') != "pending" and request_data.get('status') != "error_notifying_target":
-            await query.edit_message_text(f"This request has already been actioned (status: {request_data.get('status')}).")
+            await query.edit_message_text(f"This calendar access request has already been actioned (status: {request_data.get('status')}).")
             return
 
         target_user_id = str(user_id) # The user clicking is the target
         if target_user_id != request_data.get('target_user_id'):
-            logger.warning(f"User {user_id} tried to deny request {request_id} not meant for them (target: {request_data.get('target_user_id')})")
-            await query.edit_message_text("Error: This request is not for you.")
+            logger.warning(f"User {user_id} tried to deny calendar access request {request_id} not meant for them (target: {request_data.get('target_user_id')})")
+            await query.edit_message_text("Error: This calendar access request is not for you.")
             return
 
         if await gs.update_calendar_access_request_status(request_id, "denied"): # MODIFIED
@@ -984,11 +1066,91 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                          f"{_format_iso_datetime_for_display(request_data['end_time_iso'])} was DENIED."
                 )
             except Exception as e:
-                logger.error(f"Failed to send denied notification to requester {requester_id} for request {request_id}: {e}")
+                logger.error(f"Failed to send denied calendar access notification to requester {requester_id} for request {request_id}: {e}")
 
-            await query.edit_message_text(text="Access request DENIED. The requester has been notified.")
+            await query.edit_message_text(text="Calendar access request DENIED. The requester has been notified.")
         else:
-            await query.edit_message_text("Failed to update request status. Please try again.")
+            await query.edit_message_text("Failed to update calendar access request status. Please try again.")
+
+    # --- Grocery List Share Request Handling ---
+    elif callback_data.startswith("glist_accept_share_"):
+        await query.answer()
+        request_id = callback_data.replace("glist_accept_share_", "")
+        logger.info(f"User {user_id} (target) attempts to ACCEPT grocery list share request {request_id}")
+
+        request_data = await gs.get_grocery_list_share_request(request_id)
+        if not request_data:
+            await query.edit_message_text("This grocery list share request was not found or may have expired.")
+            return
+        
+        current_status = request_data.get('status')
+        if current_status != "pending" and current_status != "error_notifying_target": # Allow re-trying if notification failed
+            await query.edit_message_text(f"This share request has already been actioned (status: {current_status}).")
+            return
+
+        respondee_user_id_str = str(user_id)
+        if respondee_user_id_str != request_data.get('target_user_id'):
+            logger.warning(f"User {user_id} tried to accept glist share request {request_id} not meant for them (target: {request_data.get('target_user_id')})")
+            await query.edit_message_text("Error: This share request is not for you to accept.")
+            return
+
+        success = await gs.update_grocery_list_share_request_status(request_id, "approved", respondee_user_id_str)
+        if success:
+            await query.edit_message_text("✅ Sharing request accepted! You now have access to the grocery list.")
+            # Notify original requester
+            requester_id = request_data.get('requester_id')
+            target_user_name = query.from_user.first_name or f"User {user_id}" # Name of user who clicked 'accept'
+            try:
+                await context.bot.send_message(
+                    chat_id=requester_id,
+                    text=f"🎉 <b>{html.escape(target_user_name)}</b> has ACCEPTED your grocery list sharing request."
+                         f" (For list ID: {html.escape(str(request_data.get('list_id')))})",
+                    parse_mode=ParseMode.HTML
+                )
+            except Exception as e:
+                logger.error(f"Failed to send glist share acceptance notification to requester {requester_id} for request {request_id}: {e}")
+        else:
+            await query.edit_message_text("Failed to accept sharing request. This could be due to an internal issue or if the list owner needs to connect their account. Please try again later.")
+            # Potentially log more details or set request status to 'error' in Firestore via gs
+
+    elif callback_data.startswith("glist_deny_share_"):
+        await query.answer()
+        request_id = callback_data.replace("glist_deny_share_", "")
+        logger.info(f"User {user_id} (target) attempts to DENY grocery list share request {request_id}")
+
+        request_data = await gs.get_grocery_list_share_request(request_id)
+        if not request_data:
+            await query.edit_message_text("This grocery list share request was not found or may have expired.")
+            return
+
+        current_status = request_data.get('status')
+        if current_status != "pending" and current_status != "error_notifying_target":
+            await query.edit_message_text(f"This share request has already been actioned (status: {current_status}).")
+            return
+        
+        respondee_user_id_str = str(user_id)
+        if respondee_user_id_str != request_data.get('target_user_id'):
+            logger.warning(f"User {user_id} tried to deny glist share request {request_id} not meant for them (target: {request_data.get('target_user_id')})")
+            await query.edit_message_text("Error: This share request is not for you to deny.")
+            return
+
+        success = await gs.update_grocery_list_share_request_status(request_id, "denied", respondee_user_id_str)
+        if success:
+            await query.edit_message_text("❌ Sharing request denied. The requester has been notified.")
+            # Notify original requester
+            requester_id = request_data.get('requester_id')
+            target_user_name = query.from_user.first_name or f"User {user_id}"
+            try:
+                await context.bot.send_message(
+                    chat_id=requester_id,
+                    text=f"😔 <b>{html.escape(target_user_name)}</b> has DENIED your grocery list sharing request."
+                         f" (For list ID: {html.escape(str(request_data.get('list_id')))})",
+                    parse_mode=ParseMode.HTML
+                )
+            except Exception as e:
+                logger.error(f"Failed to send glist share denial notification to requester {requester_id} for request {request_id}: {e}")
+        else:
+            await query.edit_message_text("Failed to deny sharing request. Please try again later.")
 
     else:
         await query.answer() # Ensure it's called early for unhandled
@@ -1107,41 +1269,162 @@ async def glist_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def glist_show(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Shows the user's grocery list."""
-    user_id = update.effective_user.id
-    logger.info(f"User {user_id} requesting to show grocery list.")
+    """Shows the user's owned and shared grocery lists."""
+    assert update.effective_user is not None, "Effective user should not be None"
+    user_id_str = str(update.effective_user.id)
+    logger.info(f"User {user_id_str} requesting to show grocery lists.")
 
-    grocery_list = await gs.get_grocery_list(user_id) # MODIFIED
+    message_parts = []
 
-    if grocery_list is None:
-        logger.error(f"Failed to retrieve grocery list for user {user_id} (gs returned None).")
+    # 1. Get Owned Lists
+    owned_lists = await gs.get_user_owned_grocery_lists(user_id_str)
+    if owned_lists:
+        for owned_list_data in owned_lists:
+            list_id = owned_list_data.get('id', 'Unknown ID')
+            items = owned_list_data.get('items', [])
+            # For simplicity, just using list ID. A 'name' field in GroceryList model would be better.
+            # list_name = owned_list_data.get('name', f"List ID: {list_id}") 
+            # For now, let's just call it "Your Primary List" if only one, or by ID if multiple.
+            list_display_name = "🛒 Your Grocery List"
+            if len(owned_lists) > 1:
+                 list_display_name = f"🛒 Your Grocery List (ID: {html.escape(list_id)})"
+            
+            if not items:
+                message_parts.append(f"{list_display_name} is empty.")
+            else:
+                message_parts.append(f"{list_display_name}:")
+                for item in items:
+                    message_parts.append(f"- {html.escape(item)}")
+            message_parts.append("") # Add a blank line for separation
+    else:
+        # If no owned lists, gs.get_grocery_list (old logic) would return [], so new logic is similar
+        logger.info(f"No owned grocery lists found for user {user_id_str}.")
+        # message_parts.append("You don't have any owned grocery lists yet. Add items with /glist_add")
+
+
+    # 2. Get Shared Lists
+    shared_lists = await gs.get_shared_grocery_lists_for_user(user_id_str)
+    if shared_lists:
+        message_parts.append("🔗 Shared Grocery Lists:")
+        for shared_list_data in shared_lists:
+            list_id = shared_list_data.get('id', 'Unknown ID')
+            items = shared_list_data.get('items', [])
+            owner_id = shared_list_data.get('owner_id', 'Unknown Owner')
+            # Ideally, fetch owner_name here, but for now, just use owner_id
+            # list_name = shared_list_data.get('name', f"List ID: {list_id}") 
+            list_display_name = f"Shared List (ID: {html.escape(list_id)}) from User {html.escape(owner_id)}"
+
+            if not items:
+                message_parts.append(f"{list_display_name} is empty.")
+            else:
+                message_parts.append(f"{list_display_name}:")
+                for item in items:
+                    message_parts.append(f"- {html.escape(item)}")
+            message_parts.append("") # Add a blank line
+
+    # 3. Combine and Send
+    if not message_parts: # Neither owned nor shared lists found
         await update.message.reply_text(
-            "Sorry, there was an error trying to get your grocery list."
-        )
-    elif not grocery_list: # Empty list
-        logger.info(f"Grocery list is empty for user {user_id}.")
-        await update.message.reply_text(
-            "🛒 Your grocery list is empty! Add items with /glist_add item1 item2 ..."
+            "🛒 Your grocery list is empty, and no lists are shared with you! "
+            "Add items with `/glist_add <item>` or ask someone to `/glist_share` with you."
         )
     else:
-        logger.info(f"Retrieved {len(grocery_list)} items for user {user_id}.")
-        message_lines = ["🛒 Your Grocery List:"]
-        for item in grocery_list:
-            message_lines.append(f"- {html.escape(item)}") # Escape HTML special chars
-        
-        await update.message.reply_text("\n".join(message_lines), parse_mode=ParseMode.HTML)
+        final_message = "\n".join(message_parts).strip()
+        await update.message.reply_text(final_message, parse_mode=ParseMode.HTML)
 
 
 async def glist_clear(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Clears the user's grocery list."""
-    user_id = update.effective_user.id
-    logger.info(f"User {user_id} requesting to clear grocery list.")
+    """Clears items from the user's primary owned grocery list."""
+    assert update.effective_user is not None, "Effective user should not be None"
+    user_id_str = str(update.effective_user.id)
+    logger.info(f"User {user_id_str} requesting to clear their primary grocery list.")
 
-    if await gs.delete_grocery_list(user_id): # MODIFIED
-        logger.info(f"Successfully cleared grocery list for user {user_id}.")
-        await update.message.reply_text("🗑️ Your grocery list has been cleared.")
+    # gs.clear_grocery_list_items by default clears the first owned list found if list_id is None.
+    if await gs.clear_grocery_list_items(user_id_str, list_id=None):
+        logger.info(f"Successfully cleared items from owned grocery list for user {user_id_str}.")
+        await update.message.reply_text("🗑️ Items from your primary grocery list have been cleared.")
     else:
-        logger.error(f"Failed to clear grocery list for user {user_id}.")
+        # This could mean no owned list was found, or an error occurred.
+        # gs.clear_grocery_list_items logs details.
+        logger.warning(f"Problem clearing grocery list for user {user_id_str} (it might be that no owned list exists or an error occurred).")
         await update.message.reply_text(
-            "Sorry, there was a problem clearing your grocery list."
+            "Sorry, there was a problem clearing your grocery list. "
+            "You might not have an owned list, or an unexpected error occurred."
         )
+
+# === Grocery List Sharing Handlers ===
+
+GLIST_SHARE_SELECT_USER_REQUEST_ID_KEY = 'glist_share_select_user_request_id'
+GLIST_SHARE_LIST_ID_KEY = 'glist_share_list_id_to_share'
+
+async def glist_share_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Starts the grocery list sharing flow.
+    Step 1: Checks for an owned list and prompts user to select a target user.
+    """
+    assert update.effective_user is not None, "Effective user should not be None"
+    assert update.message is not None, "Update message should not be None"
+    assert context.user_data is not None, "Context user_data should not be None"
+
+    requester_id_str = str(update.effective_user.id)
+    logger.info(f"User {requester_id_str} initiated /glist_share")
+
+    # 1. Check if user is connected (not strictly necessary for sharing metadata, but good practice)
+    # if not await gs.is_user_connected(update.effective_user.id):
+    #     await update.message.reply_text("It's helpful if you're connected via /connect_calendar first, though not strictly required for sharing lists.")
+        # return # Or allow to proceed
+
+    # 2. Check if the user has an owned grocery list.
+    owned_lists = await gs.get_user_owned_grocery_lists(requester_id_str)
+    
+    owned_list_to_share = None
+    if not owned_lists:
+        await update.message.reply_text(
+            "You don't have a grocery list to share. Create one first using `/glist_add <item>`."
+        )
+        return
+    
+    # For now, if multiple owned lists, use the first one.
+    # Future enhancement: Ask user to select which list if multiple.
+    owned_list_to_share = owned_lists[0] 
+    list_id_to_share = owned_list_to_share.get('id')
+
+    if not list_id_to_share:
+        logger.error(f"User {requester_id_str} has an owned list but it's missing an ID: {owned_list_to_share}")
+        await update.message.reply_text("There was an issue identifying your grocery list. Please try again.")
+        return
+
+    context.user_data[GLIST_SHARE_LIST_ID_KEY] = list_id_to_share
+    list_name = owned_list_to_share.get('items', ['Your List'])[0] if owned_list_to_share.get('items') else "Your List" # Crude name
+    logger.info(f"User {requester_id_str} wants to share list ID: {list_id_to_share} (tentatively named '{list_name}')")
+
+
+    # 3. Send "Select User" prompt with KeyboardButtonRequestUsers
+    # Generate a unique request ID for this specific user selection interaction
+    # Using a timestamp-based approach or a more robust UUID if preferred.
+    # For simplicity, let's use a counter or timestamp for now if it needs to be an int.
+    # Telegram's request_id for KeyboardButtonRequestUsers is an int.
+    glist_share_request_users_id = int(time.time()) # Simple unique ID for this button press
+    context.user_data[GLIST_SHARE_SELECT_USER_REQUEST_ID_KEY] = glist_share_request_users_id
+
+    button_request_users_config = KeyboardButtonRequestUsers(
+        request_id=glist_share_request_users_id, # This ID will be returned in update.message.users_shared.request_id
+        user_is_bot=False, # We want to select real users, not bots
+        max_quantity=1     # Allow selecting only one user
+    )
+    button_select_user = KeyboardButton(
+        text="Select User to Share With", # Text on the button itself
+        request_users=button_request_users_config
+    )
+    reply_markup = ReplyKeyboardMarkup(
+        keyboard=[[button_select_user]],
+        resize_keyboard=True,
+        one_time_keyboard=True # Keyboard hides after one use
+    )
+
+    await update.message.reply_text(
+        f"Okay, you want to share your grocery list (currently showing items: {', '.join(owned_list_to_share.get('items', ['empty'])[:3])}...). " # Show a few items
+        "Please select the user you want to share this list with using the button below.",
+        reply_markup=reply_markup
+    )
+    logger.info(f"User {requester_id_str} prompted to select target user for grocery list sharing (KB request ID: {glist_share_request_users_id}).")
