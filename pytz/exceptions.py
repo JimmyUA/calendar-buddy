@@ -1,0 +1,2 @@
+class UnknownTimeZoneError(Exception):
+    pass
