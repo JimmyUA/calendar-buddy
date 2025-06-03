@@ -1,89 +1,75 @@
 # tests/test_utils.py
 import pytest
-from datetime import datetime
+from datetime import datetime, date, timedelta
+import pytz # For creating timezone objects for testing _format_event_time
 
-from time_util import format_to_nice_date
+from utils import _format_event_time, escape_markdown_v2
 
+# === Tests for _format_event_time ===
 
-# Assuming your utility function is in a file named 'date_utils.py'
-# or 'utils.py' at the root of your project.
-# Adjust the import path as necessary.
-# If it's in your_project_root/utils.py:
-# If it's in your_project_root/your_module/date_utils.py:
-# from your_module.date_utils import format_to_nice_date
+USER_TZ_AMS = pytz.timezone("Europe/Amsterdam")
+USER_TZ_LA = pytz.timezone("America/Los_Angeles")
+USER_TZ_UTC = pytz.utc
 
-
-# Test cases with different valid ISO date strings
 @pytest.mark.parametrize(
-    "iso_input, expected_output",
+    "event_data, user_tz, expected_output",
     [
-        # Test case from your example (with timezone offset)
-        ("2025-05-18T12:33:00+02:00", "Sunday, 18 May 2025 · 12:33"),
-        # Test case with UTC (Z suffix)
-        ("2024-12-25T09:00:00Z", "Wednesday, 25 December 2024 · 09:00"),
-        # Test case with different timezone offset
-        ("2023-07-04T17:45:30-07:00", "Tuesday, 4 July 2023 · 17:45"),
-        # Test case with no timezone offset (naive datetime, will be treated as local by strftime)
-        # Note: datetime.fromisoformat() creates a naive datetime if no offset is present.
-        # The output of strftime will depend on the system's locale settings for month/day names
-        # if no locale is explicitly set. For consistency, it's often better for ISO strings
-        # to have timezone info.
-        ("2022-01-01T00:00:00", "Saturday, 1 January 2022 · 00:00"),
-        # Test with single digit day and month (checking '%-d')
-        ("2024-03-05T08:05:00+01:00", "Tuesday, 5 March 2024 · 08:05"),
-        # Test with different hour/minute
-        ("2025-11-20T23:59:59+00:00", "Thursday, 20 November 2025 · 23:59"),
-    ],
+        # Timed event, same day
+        ({"start": {"dateTime": "2024-07-15T10:00:00+02:00"}, "end": {"dateTime": "2024-07-15T11:00:00+02:00"}}, USER_TZ_AMS, "Mon, Jul 15, 2024 at 10:00 AM CEST - 11:00 AM CEST"),
+        # Timed event, spanning days
+        ({"start": {"dateTime": "2024-07-15T22:00:00+02:00"}, "end": {"dateTime": "2024-07-16T01:00:00+02:00"}}, USER_TZ_AMS, "Mon, Jul 15, 2024 at 10:00 PM CEST - Jul 16, 2024 01:00 AM CEST"),
+        # All-day event, single day
+        ({"start": {"date": "2024-07-15"}, "end": {"date": "2024-07-16"}}, USER_TZ_AMS, "Mon, Jul 15 (All day)"),
+        # All-day event, multi-day (e.g., 15th to 16th, so 2 days)
+        ({"start": {"date": "2024-07-15"}, "end": {"date": "2024-07-17"}}, USER_TZ_AMS, "Mon, Jul 15 - Tue, Jul 16 (All day)"),
+        # Timed event, different timezone (PDT to Amsterdam)
+        ({"start": {"dateTime": "2024-07-15T10:00:00-07:00"}, "end": {"dateTime": "2024-07-15T11:00:00-07:00"}}, USER_TZ_AMS, "Mon, Jul 15, 2024 at 07:00 PM CEST - 08:00 PM CEST"),
+        # Timed event, UTC to Amsterdam
+        ({"start": {"dateTime": "2024-07-15T10:00:00Z"}, "end": {"dateTime": "2024-07-15T11:00:00Z"}}, USER_TZ_AMS, "Mon, Jul 15, 2024 at 12:00 PM CEST - 01:00 PM CEST"),
+        # Edge case: Event ends at midnight
+        ({"start": {"dateTime": "2024-07-15T22:00:00+02:00"}, "end": {"dateTime": "2024-07-16T00:00:00+02:00"}}, USER_TZ_AMS, "Mon, Jul 15, 2024 at 10:00 PM CEST - Jul 16, 2024 12:00 AM CEST"),
+        # Edge case: Event starts at midnight
+        ({"start": {"dateTime": "2024-07-15T00:00:00+02:00"}, "end": {"dateTime": "2024-07-15T02:00:00+02:00"}}, USER_TZ_AMS, "Mon, Jul 15, 2024 at 12:00 AM CEST - 02:00 AM CEST"),
+    ]
 )
-def test_format_to_nice_date_valid_inputs(iso_input, expected_output):
-    """
-    Tests format_to_nice_date with various valid ISO 8601 date strings.
-    """
-    assert format_to_nice_date(iso_input) == expected_output
+def test_format_event_time_valid_cases(event_data, user_tz, expected_output):
+    assert _format_event_time(event_data, user_tz) == expected_output
+
+def test_format_event_time_missing_start_info():
+    event = {"id": "test_event_1", "end": {"dateTime": "2024-07-15T11:00:00Z"}}
+    assert _format_event_time(event, USER_TZ_UTC) == "[Unknown Start Time]"
+
+def test_format_event_time_missing_end_datetime_for_timed_event():
+    # If 'end' is missing 'dateTime' for a timed event, it should fallback to start_str
+    # (current implementation does this: if not end_str: end_str = start_str)
+    # This means start and end time will be the same.
+    event = {"id": "test_event_2", "start": {"dateTime": "2024-07-15T10:00:00Z"}, "end": {}} # No end.dateTime or end.date
+    # Expected: "Mon, Jul 15, 2024 at 10:00 AM UTC - 10:00 AM UTC" (or similar if format changes)
+    # The format for same start/end might be just the start time, depending on preferences.
+    # Current _format_event_time: "Mon, Jul 15, 2024 at 10:00 AM UTC - 10:00 AM UTC"
+    assert _format_event_time(event, USER_TZ_UTC) == "Mon, Jul 15, 2024 at 10:00 AM UTC - 10:00 AM UTC"
+
+def test_format_event_time_invalid_date_string(caplog):
+    event = {"id": "test_event_3", "start": {"dateTime": "INVALID_STRING"}, "end": {"dateTime": "2024-07-15T11:00:00Z"}}
+    result = _format_event_time(event, USER_TZ_UTC)
+    assert "[Error Formatting]" in result
+    assert "Error parsing/formatting event time" in caplog.text
+
+def test_format_event_time_user_tz_none(caplog):
+    event = {"id": "test_event_4", "start": {"dateTime": "2024-07-15T10:00:00Z"}, "end": {"dateTime": "2024-07-15T11:00:00Z"}}
+    # The function signature requires pytz.BaseTzInfo, but testing defense if None is passed.
+    # Current implementation would raise AttributeError. A more robust function would check.
+    # For now, let's assert it raises AttributeError or test the intended behavior if it's handled.
+    # Assuming the function is not changed to handle user_tz=None and relies on correct type.
+    with pytest.raises(AttributeError): # Or TypeError, depending on how it's used
+        _format_event_time(event, None)
+    # If the function were changed to handle user_tz=None and default to UTC:
+    # result = _format_event_time(event, None)
+    # assert "10:00 AM UTC" in result # Or similar, depending on default logic
+    # assert "user_tz was None, defaulted to UTC" in caplog.text
 
 
-# Test cases for invalid inputs
-def test_format_to_nice_date_invalid_format():
-    """
-    Tests that format_to_nice_date raises ValueError for incorrectly formatted strings.
-    """
-    with pytest.raises(ValueError, match="Invalid isoformat string"):
-        format_to_nice_date("2025/05/18 12:33:00")  # Incorrect format
-
-    with pytest.raises(ValueError, match="Invalid isoformat string"):
-        format_to_nice_date("Not a date")
-
-    with pytest.raises(ValueError, match="Invalid isoformat string"):
-        format_to_nice_date("2025-05-18T12:33:00X02:00") # Invalid timezone format
-
-
-def test_format_to_nice_date_invalid_date_parts():
-    """
-    Tests that format_to_nice_date raises ValueError for invalid date/time components.
-    """
-    with pytest.raises(ValueError, match="month must be in 1..12"):
-        format_to_nice_date("2025-13-18T12:33:00+02:00")  # Invalid month
-
-    with pytest.raises(ValueError, match="day is out of range for month"):
-        format_to_nice_date("2025-02-30T12:33:00+02:00")  # Invalid day for February
-
-    with pytest.raises(ValueError, match="hour must be in 0..23"):
-        format_to_nice_date("2025-05-18T25:33:00+02:00")  # Invalid hour
-
-
-# Note on zoneinfo:
-# Your current function `format_to_nice_date` uses `datetime.fromisoformat()`.
-# If the input ISO string has timezone offset information (e.g., +02:00 or Z),
-# `datetime.fromisoformat()` will create a timezone-aware datetime object.
-# The `strftime` method on a timezone-aware object will format the time
-# *according to that object's stored timezone*.
-# The `zoneinfo` import in your original snippet isn't actually used by this function.
-# If you intended to convert the datetime to a *specific* target timezone
-# before formatting, you would need to use `dt.astimezone(ZoneInfo("Your/TargetZone"))`.
-# The current tests reflect the behavior of your provided function.
-
-from utils import escape_markdown_v2
-
+# === Tests for escape_markdown_v2 ===
 class TestEscapeMarkdownV2:
     def test_no_special_chars(self):
         assert escape_markdown_v2("Hello world") == "Hello world"

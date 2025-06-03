@@ -57,28 +57,65 @@ def mock_firestore_client_globally():
     mock_collection_obj = MagicMock(name="MockCollection")
     mock_document_obj = MagicMock(name="MockDocument")
     mock_snapshot_obj = MagicMock(name="MockSnapshot")
+    mock_query_obj = MagicMock(name="MockQuery") # For query chains
 
     mock_client_instance.collection.return_value = mock_collection_obj
     mock_collection_obj.document.return_value = mock_document_obj
+    # Query methods on collection
+    mock_collection_obj.where.return_value = mock_query_obj
+    mock_collection_obj.order_by.return_value = mock_query_obj
+    mock_collection_obj.limit.return_value = mock_query_obj
+    mock_collection_obj.stream.return_value = [] # Default for collection.stream()
+    mock_collection_obj.add = MagicMock(name="MockCollectionAdd", return_value=(MagicMock(id="new_doc_id"), None)) # add() returns (doc_ref, write_result)
+    # Query methods on query object
+    mock_query_obj.where.return_value = mock_query_obj # Allow multiple .where calls
+    mock_query_obj.order_by.return_value = mock_query_obj
+    mock_query_obj.limit.return_value = mock_query_obj
+    mock_query_obj.stream.return_value = [] # Default for query.stream()
+
     mock_document_obj.get.return_value = mock_snapshot_obj
     mock_document_obj.set = MagicMock(name="MockDocSet")
     mock_document_obj.delete = MagicMock(name="MockDocDelete")
     mock_document_obj.update = MagicMock(name="MockDocUpdate")
+    # Collection reference for subcollections
+    mock_document_obj.collection.return_value = mock_collection_obj # Subcollections return a collection mock
+
     mock_snapshot_obj.exists = False
     mock_snapshot_obj.to_dict.return_value = {}
     mock_snapshot_obj.get = MagicMock(name="MockSnapshotGetField", return_value=None)
+    # Add id to snapshot mock
+    mock_snapshot_obj.id = "mock_snapshot_id"
 
-    def _set_snapshot_data(data_dict, exists_val=True):
+
+    def _set_snapshot_data(data_dict, exists_val=True, doc_id="mock_snapshot_id"):
         mock_snapshot_obj.exists = exists_val
         mock_snapshot_obj.to_dict.return_value = data_dict if exists_val else {}
+        mock_snapshot_obj.id = doc_id
         if exists_val and isinstance(data_dict, dict):
+            # Make .get() behave like a dict.get
             mock_snapshot_obj.get = lambda key, default=None: data_dict.get(key, default)
+            # Ensure .reference is a mock with an id attribute
+            mock_snapshot_obj.reference = MagicMock(id=doc_id)
         else:
             mock_snapshot_obj.get = MagicMock(name="MockSnapshotGetField_NotExists", return_value=None)
+            mock_snapshot_obj.reference = MagicMock(id=doc_id)
+
 
     mock_snapshot_obj.configure_mock_data = _set_snapshot_data
 
+    # Batch and Transaction
+    mock_batch_obj = MagicMock(name="MockBatch")
+    mock_batch_obj.commit = MagicMock(name="MockBatchCommit")
+    mock_batch_obj.set = MagicMock(name="MockBatchSet")
+    mock_batch_obj.update = MagicMock(name="MockBatchUpdate")
+    mock_batch_obj.delete = MagicMock(name="MockBatchDelete")
+    mock_client_instance.batch.return_value = mock_batch_obj
+
     mock_transaction_obj = MagicMock(name="MockTransaction")
+    mock_transaction_obj.set = MagicMock(name="MockTransactionSet")
+    mock_transaction_obj.update = MagicMock(name="MockTransactionUpdate")
+    mock_transaction_obj.delete = MagicMock(name="MockTransactionDelete")
+    # mock_transaction_obj.get = ... # If transactions need to control .get() behavior directly
     mock_client_instance.transaction.return_value = mock_transaction_obj
     # --- End of mock_client_instance setup ---
 
@@ -266,16 +303,52 @@ def mock_firestore_db(mock_firestore_client_globally): # Depends on the global m
     db_instance = mock_firestore_client_globally
     collection_mock = db_instance.collection.return_value
     document_mock = collection_mock.document.return_value
-    snapshot_mock = document_mock.get.return_value # The snapshot returned by get()
+    snapshot_mock = document_mock.get.return_value
+    query_mock = collection_mock.where.return_value # Get the mock_query_obj
 
-    # Important: Reset mocks for document/snapshot if they are reused across tests
-    # to avoid state leakage from one test to another.
-    # Or, ensure tests always reconfigure the snapshot via snapshot_mock.configure_mock_data()
-    document_mock.reset_mock() # Resets call counts, return_values, side_effects
-    snapshot_mock.reset_mock()
-    snapshot_mock.configure_mock_data({}, exists_val=False) # Reset to default "not found" state
+    # Reset mocks to avoid state leakage from one test to another.
+    db_instance.reset_mock() # Reset calls to db.collection(), db.transaction(), db.batch()
+    collection_mock.reset_mock() # Reset calls to collection.document(), .where(), .add() etc.
+    document_mock.reset_mock() # Resets .get(), .set(), .delete(), .update(), .collection()
+    snapshot_mock.reset_mock() # Resets .exists, .to_dict(), .get()
+    query_mock.reset_mock() # Resets .stream(), further .where(), .limit(), .order_by()
 
-    return db_instance, collection_mock, document_mock, snapshot_mock
+    # Ensure default behaviors are reset too
+    snapshot_mock.configure_mock_data({}, exists_val=False)
+    query_mock.stream.return_value = [] # Default to no results for queries
+    collection_mock.add.return_value = (MagicMock(id="new_doc_id"), None) # Reset add return
+
+    # Add a helper to configure query stream results more easily
+    def _configure_query_stream_results(docs_data_list):
+        """
+        Configures the query_mock.stream() to return a list of mock snapshots.
+        Each item in docs_data_list should be a tuple: (doc_id, doc_data_dict).
+        """
+        mock_snapshots = []
+        for doc_id, doc_data in docs_data_list:
+            # Create a new snapshot mock for each document to ensure isolation
+            # This is important because the global mock_snapshot_obj is shared.
+            # For query results, we often need multiple, distinct snapshot objects.
+            individual_snapshot = MagicMock(name=f"MockSnapshot_{doc_id}")
+            individual_snapshot.id = doc_id
+            individual_snapshot.exists = True
+            individual_snapshot.to_dict.return_value = doc_data
+            individual_snapshot.get = lambda key, default=None, data=doc_data: data.get(key, default)
+            individual_snapshot.reference = MagicMock(id=doc_id)
+            mock_snapshots.append(individual_snapshot)
+        query_mock.stream.return_value = mock_snapshots
+
+    # Return the main client and its sub-mocks, plus the new helper
+    return {
+        "client": db_instance,
+        "collection": collection_mock,
+        "document": document_mock,
+        "snapshot": snapshot_mock, # This is the globally shared one, typically for single doc_ref.get()
+        "query": query_mock,
+        "configure_query_stream_results": _configure_query_stream_results,
+        "batch": db_instance.batch(), # Return the batch mock
+        "transaction": db_instance.transaction() # Return the transaction mock
+    }
 
 
 @pytest.fixture(autouse=True)

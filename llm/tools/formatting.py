@@ -21,6 +21,16 @@ def parse_and_format_event_time(event_data: dict, user_tz: pytz.BaseTzInfo) -> d
     if not start_val:
         return None
 
+    if user_tz is None:
+        logger.error("Error in parse_and_format_event_time: user_tz cannot be None.")
+        # Return a default error structure that format_event_list_for_agent can handle
+        return {
+            'is_all_day': False,
+            'start_dt_for_grouping': datetime.now(pytz.utc), # Fallback
+            'time_display_str': '[Time Error - Missing Timezone]',
+            'duration_display_str': ''
+        }
+
     try:
         is_all_day = 'date' in start_info
 

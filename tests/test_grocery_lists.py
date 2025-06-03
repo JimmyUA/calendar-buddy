@@ -1,5 +1,7 @@
-import unittest
+import pytest # Changed
 from unittest.mock import patch, MagicMock, AsyncMock, call # Ensure call is imported
+# For firestore.ArrayUnion
+from google.cloud import firestore as google_firestore # To mock ArrayUnion
 
 # Telegram specific imports for handler tests
 from telegram import Update, User, Message, Chat
@@ -25,139 +27,134 @@ TEST_USER_ID = 12345
 TEST_USER_ID_STR = str(TEST_USER_ID)
 TEST_USER_TIMEZONE = "America/New_York"
 
-class TestGroceryListGoogleServices(unittest.TestCase): # Should be IsolatedAsyncioTestCase if tests become async
+pytestmark = pytest.mark.asyncio
 
-    @patch('google_services.FS_COLLECTION_GROCERY_LISTS')
-    async def test_get_grocery_list_existing(self, mock_collection):
-        mock_doc_ref = MagicMock()
-        mock_snapshot = MagicMock()
-        mock_snapshot.exists = True
-        mock_snapshot.to_dict.return_value = {'items': ['apples', 'bananas']}
-        mock_doc_ref.get.return_value = mock_snapshot
-        mock_collection.document.return_value = mock_doc_ref
+# --- Tests for google_services.py grocery list functions ---
 
-        result = await gs.get_grocery_list(TEST_USER_ID) # MODIFIED
-        self.assertEqual(result, ['apples', 'bananas'])
-        mock_collection.document.assert_called_once_with(TEST_USER_ID_STR)
-        mock_doc_ref.get.assert_called_once() # This mocks the method called by asyncio.to_thread
+async def test_get_grocery_list_existing(mock_firestore_db):
+    mock_firestore_db["snapshot"].configure_mock_data({'items': ['apples', 'bananas']})
 
-    @patch('google_services.FS_COLLECTION_GROCERY_LISTS')
-    async def test_get_grocery_list_no_list(self, mock_collection):
-        mock_doc_ref = MagicMock()
-        mock_snapshot = MagicMock()
-        mock_snapshot.exists = False
-        mock_doc_ref.get.return_value = mock_snapshot
-        mock_collection.document.return_value = mock_doc_ref
+    result = await gs.get_grocery_list(TEST_USER_ID)
 
-        result = await gs.get_grocery_list(TEST_USER_ID) # MODIFIED
-        self.assertEqual(result, []) # Should return empty list
-        mock_collection.document.assert_called_once_with(TEST_USER_ID_STR)
-        mock_doc_ref.get.assert_called_once()
+    assert result == ['apples', 'bananas']
+    mock_firestore_db["client"].collection.assert_called_with(config.FS_COLLECTION_GROCERY_LISTS)
+    mock_firestore_db["collection"].document.assert_called_with(TEST_USER_ID_STR)
+    mock_firestore_db["document"].get.assert_called_once()
 
-    @patch('google_services.FS_COLLECTION_GROCERY_LISTS')
-    async def test_get_grocery_list_no_items_field(self, mock_collection):
-        mock_doc_ref = MagicMock()
-        mock_snapshot = MagicMock()
-        mock_snapshot.exists = True
-        mock_snapshot.to_dict.return_value = {'other_field': 'value'} # No 'items'
-        mock_doc_ref.get.return_value = mock_snapshot
-        mock_collection.document.return_value = mock_doc_ref
+async def test_get_grocery_list_no_list(mock_firestore_db):
+    # Default behavior of snapshot.configure_mock_data is exists=False
+    mock_firestore_db["snapshot"].configure_mock_data({}, exists_val=False)
 
-        result = await gs.get_grocery_list(TEST_USER_ID) # MODIFIED
-        self.assertIsNone(result)
-        mock_collection.document.assert_called_once_with(TEST_USER_ID_STR)
+    result = await gs.get_grocery_list(TEST_USER_ID)
 
-    @patch('google_services.FS_COLLECTION_GROCERY_LISTS')
-    async def test_get_grocery_list_items_not_list(self, mock_collection):
-        mock_doc_ref = MagicMock()
-        mock_snapshot = MagicMock()
-        mock_snapshot.exists = True
-        mock_snapshot.to_dict.return_value = {'items': 'not-a-list'}
-        mock_doc_ref.get.return_value = mock_snapshot
-        mock_collection.document.return_value = mock_doc_ref
+    assert result == [] # Should return empty list if document doesn't exist
+    mock_firestore_db["client"].collection.assert_called_with(config.FS_COLLECTION_GROCERY_LISTS)
+    mock_firestore_db["collection"].document.assert_called_with(TEST_USER_ID_STR)
+    mock_firestore_db["document"].get.assert_called_once()
 
-        result = await gs.get_grocery_list(TEST_USER_ID) # MODIFIED
-        self.assertIsNone(result)
-        mock_collection.document.assert_called_once_with(TEST_USER_ID_STR)
+async def test_get_grocery_list_no_items_field(mock_firestore_db):
+    mock_firestore_db["snapshot"].configure_mock_data({'other_field': 'value'})
 
-    @patch('google_services.FS_COLLECTION_GROCERY_LISTS')
-    async def test_get_grocery_list_firestore_error(self, mock_collection):
-        mock_doc_ref = MagicMock()
-        mock_doc_ref.get.side_effect = Exception("Firestore boom!")
-        mock_collection.document.return_value = mock_doc_ref
+    result = await gs.get_grocery_list(TEST_USER_ID)
 
-        result = await gs.get_grocery_list(TEST_USER_ID) # MODIFIED
-        self.assertIsNone(result)
-        mock_collection.document.assert_called_once_with(TEST_USER_ID_STR)
+    assert result is None # Items field missing
+    mock_firestore_db["client"].collection.assert_called_with(config.FS_COLLECTION_GROCERY_LISTS)
+    mock_firestore_db["collection"].document.assert_called_with(TEST_USER_ID_STR)
 
-    @patch('google_services.FS_COLLECTION_GROCERY_LISTS')
-    @patch('google_services.firestore.ArrayUnion') # To verify its usage
-    async def test_add_to_grocery_list_new(self, mock_array_union, mock_collection):
-        mock_doc_ref = MagicMock()
-        mock_collection.document.return_value = mock_doc_ref
-        items_to_add = ['milk', 'eggs']
-        mock_array_union.return_value = "ArrayUnionObject" # Mock the return of ArrayUnion
+async def test_get_grocery_list_items_not_list(mock_firestore_db):
+    mock_firestore_db["snapshot"].configure_mock_data({'items': 'not-a-list'})
 
-        result = await gs.add_to_grocery_list(TEST_USER_ID, items_to_add) # MODIFIED
-        self.assertTrue(result)
-        mock_collection.document.assert_called_once_with(TEST_USER_ID_STR)
-        mock_array_union.assert_called_once_with(items_to_add)
-        mock_doc_ref.set.assert_called_once_with({'items': "ArrayUnionObject"}, merge=True)
+    result = await gs.get_grocery_list(TEST_USER_ID)
 
-    @patch('google_services.FS_COLLECTION_GROCERY_LISTS')
-    @patch('google_services.firestore.ArrayUnion')
-    async def test_add_to_grocery_list_existing(self, mock_array_union, mock_collection):
-        mock_doc_ref = MagicMock()
-        mock_collection.document.return_value = mock_doc_ref
-        items_to_add = ['bread']
-        mock_array_union.return_value = "ArrayUnionObjectBread"
+    assert result is None # Items field not a list
+    mock_firestore_db["client"].collection.assert_called_with(config.FS_COLLECTION_GROCERY_LISTS)
+    mock_firestore_db["collection"].document.assert_called_with(TEST_USER_ID_STR)
 
-        result = await gs.add_to_grocery_list(TEST_USER_ID, items_to_add) # MODIFIED
-        self.assertTrue(result)
-        mock_collection.document.assert_called_once_with(TEST_USER_ID_STR)
-        mock_array_union.assert_called_once_with(items_to_add)
-        mock_doc_ref.set.assert_called_once_with({'items': "ArrayUnionObjectBread"}, merge=True)
+async def test_get_grocery_list_firestore_error(mock_firestore_db):
+    mock_firestore_db["document"].get.side_effect = Exception("Firestore boom!")
 
-    @patch('google_services.FS_COLLECTION_GROCERY_LISTS')
-    async def test_add_to_grocery_list_firestore_error(self, mock_collection):
-        mock_doc_ref = MagicMock()
-        mock_doc_ref.set.side_effect = Exception("Firestore boom!")
-        mock_collection.document.return_value = mock_doc_ref
-        items_to_add = ['coffee']
+    result = await gs.get_grocery_list(TEST_USER_ID)
 
-        result = await gs.add_to_grocery_list(TEST_USER_ID, items_to_add) # MODIFIED
-        self.assertFalse(result)
-        mock_collection.document.assert_called_once_with(TEST_USER_ID_STR)
+    assert result is None
+    mock_firestore_db["client"].collection.assert_called_with(config.FS_COLLECTION_GROCERY_LISTS)
+    mock_firestore_db["collection"].document.assert_called_with(TEST_USER_ID_STR)
 
-    @patch('google_services.FS_COLLECTION_GROCERY_LISTS')
-    async def test_delete_grocery_list_existing(self, mock_collection):
-        mock_doc_ref = MagicMock()
-        mock_collection.document.return_value = mock_doc_ref
+async def test_add_to_grocery_list_empty_items(mock_firestore_db):
+    items_to_add = [] # Empty list
 
-        result = await gs.delete_grocery_list(TEST_USER_ID) # MODIFIED
-        self.assertTrue(result)
-        mock_collection.document.assert_called_once_with(TEST_USER_ID_STR)
-        mock_doc_ref.delete.assert_called_once()
+    # gs.add_to_grocery_list should return True and not call Firestore
+    result = await gs.add_to_grocery_list(TEST_USER_ID, items_to_add)
 
-    @patch('google_services.FS_COLLECTION_GROCERY_LISTS')
-    async def test_delete_grocery_list_non_existent(self, mock_collection):
-        mock_doc_ref = MagicMock()
-        mock_collection.document.return_value = mock_doc_ref
+    assert result is True
+    mock_firestore_db["document"].set.assert_not_called() # Firestore 'set' should not be called
 
-        result = await gs.delete_grocery_list(TEST_USER_ID) # MODIFIED
-        self.assertTrue(result)
-        mock_collection.document.assert_called_once_with(TEST_USER_ID_STR)
-        mock_doc_ref.delete.assert_called_once()
+async def test_add_to_grocery_list_new(mock_firestore_db, mocker):
+    items_to_add = ['milk', 'eggs']
+    # Mock firestore.ArrayUnion specifically for this test
+    mock_array_union = mocker.patch('google_services.firestore.ArrayUnion')
+    mock_array_union.return_value = "ArrayUnionObject"
 
-    @patch('google_services.FS_COLLECTION_GROCERY_LISTS')
-    async def test_delete_grocery_list_firestore_error(self, mock_collection):
-        mock_doc_ref = MagicMock()
-        mock_doc_ref.delete.side_effect = Exception("Firestore boom!")
-        mock_collection.document.return_value = mock_doc_ref
+    result = await gs.add_to_grocery_list(TEST_USER_ID, items_to_add)
 
-        result = await gs.delete_grocery_list(TEST_USER_ID) # MODIFIED
-        self.assertFalse(result)
-        mock_collection.document.assert_called_once_with(TEST_USER_ID_STR)
+    assert result is True
+    mock_firestore_db["client"].collection.assert_called_with(config.FS_COLLECTION_GROCERY_LISTS)
+    mock_firestore_db["collection"].document.assert_called_with(TEST_USER_ID_STR)
+    mock_array_union.assert_called_once_with(items_to_add)
+    mock_firestore_db["document"].set.assert_called_once_with({'items': "ArrayUnionObject"}, merge=True)
+
+async def test_add_to_grocery_list_existing(mock_firestore_db, mocker):
+    items_to_add = ['bread']
+    mock_array_union = mocker.patch('google_services.firestore.ArrayUnion')
+    mock_array_union.return_value = "ArrayUnionObjectBread"
+
+    result = await gs.add_to_grocery_list(TEST_USER_ID, items_to_add)
+
+    assert result is True
+    mock_firestore_db["client"].collection.assert_called_with(config.FS_COLLECTION_GROCERY_LISTS)
+    mock_firestore_db["collection"].document.assert_called_with(TEST_USER_ID_STR)
+    mock_array_union.assert_called_once_with(items_to_add)
+    mock_firestore_db["document"].set.assert_called_once_with({'items': "ArrayUnionObjectBread"}, merge=True)
+
+async def test_add_to_grocery_list_firestore_error(mock_firestore_db):
+    items_to_add = ['coffee']
+    mock_firestore_db["document"].set.side_effect = Exception("Firestore boom!")
+
+    result = await gs.add_to_grocery_list(TEST_USER_ID, items_to_add)
+
+    assert result is False
+    mock_firestore_db["client"].collection.assert_called_with(config.FS_COLLECTION_GROCERY_LISTS)
+    mock_firestore_db["collection"].document.assert_called_with(TEST_USER_ID_STR)
+
+async def test_delete_grocery_list_existing(mock_firestore_db):
+    result = await gs.delete_grocery_list(TEST_USER_ID)
+
+    assert result is True
+    mock_firestore_db["client"].collection.assert_called_with(config.FS_COLLECTION_GROCERY_LISTS)
+    mock_firestore_db["collection"].document.assert_called_with(TEST_USER_ID_STR)
+    mock_firestore_db["document"].delete.assert_called_once()
+
+async def test_delete_grocery_list_non_existent(mock_firestore_db):
+    # Behavior is the same as existing, delete() doesn't raise error if doc missing
+    result = await gs.delete_grocery_list(TEST_USER_ID)
+
+    assert result is True
+    mock_firestore_db["client"].collection.assert_called_with(config.FS_COLLECTION_GROCERY_LISTS)
+    mock_firestore_db["collection"].document.assert_called_with(TEST_USER_ID_STR)
+    mock_firestore_db["document"].delete.assert_called_once()
+
+async def test_delete_grocery_list_firestore_error(mock_firestore_db):
+    mock_firestore_db["document"].delete.side_effect = Exception("Firestore boom!")
+
+    result = await gs.delete_grocery_list(TEST_USER_ID)
+
+    assert result is False
+    mock_firestore_db["client"].collection.assert_called_with(config.FS_COLLECTION_GROCERY_LISTS)
+    mock_firestore_db["collection"].document.assert_called_with(TEST_USER_ID_STR)
+
+
+# --- Test classes for handlers and tools remain largely unchanged for this refactoring ---
+# They mock out the google_services functions directly, so are not affected by
+# how google_services internally implements its Firestore logic.
 
 class TestGroceryListHandlers(unittest.IsolatedAsyncioTestCase):
 

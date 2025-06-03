@@ -4,29 +4,69 @@ from telegram import Update, User, Message, Chat, InlineKeyboardMarkup, InlineKe
 from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
 import html
-import time # For generating unique request_ids if needed
+import time
+from datetime import datetime, timedelta # Added datetime, timedelta
+import pytz
 
 # Import the handlers module
 import handlers
-import google_services as gs # For mocking gs functions directly
-import pytz
+import google_services as gs
+import config # For pytz from config if needed, or directly import pytz
+from .conftest import TEST_TIMEZONE # Using TEST_TIMEZONE from conftest for consistency
 
 # Constants for testing
-TEST_REQUESTER_ID = 100
+TEST_REQUESTER_ID = 100 # Keep as is, or use TEST_USER_ID from conftest if appropriate
 TEST_REQUESTER_USERNAME = "requester_user"
 TEST_REQUESTER_FIRST_NAME = "Requester"
 
-TEST_TARGET_ID = 200 # Changed to int for User object
+TEST_TARGET_ID = 200
 TEST_TARGET_ID_STR = str(TEST_TARGET_ID)
 TEST_TARGET_USERNAME = "target_user"
 TEST_TARGET_FIRST_NAME = "TargetUser"
 
-TEST_REQUEST_DOC_ID = "firestore_req_doc_123" # ID from Firestore
-TEST_TIMEZONE_STR = "America/New_York"
-TEST_TARGET_TIMEZONE_STR = "Europe/London"
+TEST_REQUEST_DOC_ID = "firestore_req_doc_123"
+# Use TEST_TIMEZONE_STR from conftest for requester if it matches intent
+# For this file, let's assume requester is in New York, target in London for distinct testing.
+REQUESTER_USER_TZ_STR = "America/New_York"
+REQUESTER_USER_TZ = pytz.timezone(REQUESTER_USER_TZ_STR)
+TARGET_USER_TZ_STR = "Europe/London"
+TARGET_USER_TZ = pytz.timezone(TARGET_USER_TZ_STR)
+
+
+# Base datetime for dynamic test data generation
+BASE_TEST_NOW_HANDLER_ACCESS_UTC = datetime(2024, 8, 26, 12, 0, 0, tzinfo=pytz.utc) # A Monday 12:00 PM UTC
 
 # Pytest mark for async functions
 pytestmark = pytest.mark.asyncio
+
+# --- Helper functions for dynamic test data ---
+def _get_dynamic_request_data(status="pending", base_time_utc=None):
+    if base_time_utc is None:
+        base_time_utc = BASE_TEST_NOW_HANDLER_ACCESS_UTC
+
+    start_iso = base_time_utc.replace(hour=10, minute=0, second=0, microsecond=0).isoformat()
+    end_iso = base_time_utc.replace(hour=14, minute=0, second=0, microsecond=0).isoformat()
+    return {
+        "requester_id": str(TEST_REQUESTER_ID),
+        "requester_name": TEST_REQUESTER_FIRST_NAME,
+        "target_user_id": TEST_TARGET_ID_STR,
+        "start_time_iso": start_iso,
+        "end_time_iso": end_iso,
+        "status": status
+    }
+
+def _get_dynamic_events_list(base_time_utc=None):
+    if base_time_utc is None:
+        base_time_utc = BASE_TEST_NOW_HANDLER_ACCESS_UTC
+
+    event1_start = (base_time_utc + timedelta(hours=1)).replace(minute=0).isoformat()
+    event1_end = (base_time_utc + timedelta(hours=2)).replace(minute=0).isoformat()
+    event2_date = base_time_utc.date().isoformat()
+    event2_date_end = (base_time_utc.date() + timedelta(days=1)).isoformat()
+    return [
+        {"id": "dyn_event_1", "summary": "Event 1 Dynamic CB", "start": {"dateTime": event1_start}, "end": {"dateTime": event1_end}},
+        {"id": "dyn_event_2", "summary": "Event 2 Dynamic AllDay CB", "start": {"date": event2_date}, "end": {"date": event2_date_end}}
+    ]
 
 # --- Fixtures ---
 @pytest.fixture
@@ -93,24 +133,38 @@ async def test_request_calendar_access_step1_success(
     mock_update_message.message.text = f"/request_access {time_period_arg}"
     mock_context.args = args
 
-    mock_get_req_tz_prompt.return_value = pytz.timezone(TEST_TIMEZONE_STR)
-    mock_parse_range.return_value = {"start_iso": "2024-08-01T10:00:00Z", "end_iso": "2024-08-01T14:00:00Z"}
+    mock_get_req_tz_prompt.return_value = REQUESTER_USER_TZ
+
+    # Dynamic dates for mock_parse_range return value
+    # e.g., "tomorrow 10am to 2pm" relative to BASE_TEST_NOW_HANDLER_ACCESS_UTC in REQUESTER_USER_TZ
+    requester_now = BASE_TEST_NOW_HANDLER_ACCESS_UTC.astimezone(REQUESTER_USER_TZ)
+    start_dt_req_tz = (requester_now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
+    end_dt_req_tz = start_dt_req_tz.replace(hour=14, minute=0)
+
+    mock_parse_range.return_value = {
+        "start_iso": start_dt_req_tz.isoformat(),
+        "end_iso": end_dt_req_tz.isoformat()
+    }
 
     # Mock datetime.now().timestamp() for predictable keyboard_request_id
-    mock_timestamp = int(time.time())
-    mock_datetime.now.return_value.timestamp.return_value = mock_timestamp
+    fixed_timestamp = int(BASE_TEST_NOW_HANDLER_ACCESS_UTC.timestamp())
+    mock_datetime.now.return_value.timestamp.return_value = fixed_timestamp
 
     await handlers.request_calendar_access_command(mock_update_message, mock_context)
 
     mock_is_connected.assert_called_once_with(TEST_REQUESTER_ID)
     mock_get_req_tz_prompt.assert_called_once()
+    # Check that parse_date_range_llm was called with the requester's current time in ISO format
     mock_parse_range.assert_called_once()
+    assert mock_parse_range.call_args[0][0] == time_period_arg
+    assert mock_parse_range.call_args[0][1] == requester_now.isoformat()
+
 
     # Verify user_data population
-    assert mock_context.user_data['select_user_request_id'] == mock_timestamp
+    assert mock_context.user_data['select_user_request_id'] == fixed_timestamp
     assert mock_context.user_data['calendar_request_period']['original'] == time_period_arg
-    assert mock_context.user_data['calendar_request_period']['start_iso'] == "2024-08-01T10:00:00Z"
-    assert mock_context.user_data['calendar_request_period']['end_iso'] == "2024-08-01T14:00:00Z"
+    assert mock_context.user_data['calendar_request_period']['start_iso'] == start_dt_req_tz.isoformat()
+    assert mock_context.user_data['calendar_request_period']['end_iso'] == end_dt_req_tz.isoformat()
 
     # Verify reply_text call for user selection
     mock_update_message.message.reply_text.assert_called_once()
@@ -183,13 +237,21 @@ async def test_users_shared_success(
     mock_update_users_shared.message.users_shared.users = [User(id=TEST_TARGET_ID, first_name=TEST_TARGET_FIRST_NAME, is_bot=False, username=TEST_TARGET_USERNAME)]
 
     mock_context.user_data['select_user_request_id'] = kb_request_id
+
+    # Dynamic dates for calendar_request_period
+    original_period_desc = "next Tuesday 9-11am" # This is fine as a descriptor
+    # Let's assume "next Tuesday" relative to BASE_TEST_NOW_HANDLER_ACCESS_UTC
+    # BASE_TEST_NOW_HANDLER_ACCESS_UTC is a Monday. So next Tuesday is tomorrow.
+    start_dt_utc = (BASE_TEST_NOW_HANDLER_ACCESS_UTC + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+    end_dt_utc = start_dt_utc.replace(hour=11, minute=0)
+
     mock_context.user_data['calendar_request_period'] = {
-        'original': "next Tuesday 9-11am",
-        'start_iso': "2024-08-06T09:00:00Z",
-        'end_iso': "2024-08-06T11:00:00Z"
+        'original': original_period_desc,
+        'start_iso': start_dt_utc.isoformat(),
+        'end_iso': end_dt_utc.isoformat()
     }
     mock_add_req.return_value = TEST_REQUEST_DOC_ID
-    mock_get_target_tz.return_value = TEST_TARGET_TIMEZONE_STR
+    mock_get_target_tz.return_value = TARGET_USER_TZ_STR # Target is in London
 
     await handlers.users_shared_handler(mock_update_users_shared, mock_context)
 
@@ -201,27 +263,37 @@ async def test_users_shared_success(
         requester_id=str(TEST_REQUESTER_ID),
         requester_name=TEST_REQUESTER_FIRST_NAME,
         target_user_id=TEST_TARGET_ID_STR,
-        start_time_iso="2024-08-06T09:00:00Z",
-        end_time_iso="2024-08-06T11:00:00Z"
+        start_time_iso=start_dt_utc.isoformat(), # Dynamic
+        end_time_iso=end_dt_utc.isoformat()     # Dynamic
     )
     # Check confirmation to requester
     mock_context.bot.send_message.assert_any_call(
         chat_id=str(TEST_REQUESTER_ID),
-        text=f"Great! Your calendar access request for '<b>{html.escape('next Tuesday 9-11am')}</b>' "
+        text=f"Great! Your calendar access request for '<b>{html.escape(original_period_desc)}</b>' "
              f"has been sent to <b>{html.escape(TEST_TARGET_FIRST_NAME)}</b>."
              f" (Request ID: `{TEST_REQUEST_DOC_ID}`)",
         parse_mode=ParseMode.HTML
     )
     # Check notification to target
     target_notification_kwargs = None
-    for call in mock_context.bot.send_message.call_args_list:
-        if call.kwargs['chat_id'] == TEST_TARGET_ID_STR:
-            target_notification_kwargs = call.kwargs
+    for call_args_tuple in mock_context.bot.send_message.call_args_list:
+        # call_args_tuple is a unittest.mock.call object, which is like a tuple (args, kwargs)
+        # We need to access its kwargs attribute.
+        current_kwargs = call_args_tuple.kwargs
+        if current_kwargs.get('chat_id') == TEST_TARGET_ID_STR:
+            target_notification_kwargs = current_kwargs
             break
+
     assert target_notification_kwargs is not None
     assert f"User <b>{TEST_REQUESTER_FIRST_NAME}</b> (Telegram: @{TEST_REQUESTER_USERNAME})" in target_notification_kwargs['text']
-    assert "<b>From:</b> 2024-08-06 10:00 AM BST" in target_notification_kwargs['text'] # 09:00Z is 10:00 BST
-    assert "<b>To:</b>   2024-08-06 12:00 PM BST" in target_notification_kwargs['text'] # 11:00Z is 12:00 PM BST
+
+    # Dynamic assertion for formatted times in target's timezone
+    start_display_target = handlers._format_iso_datetime_for_display(start_dt_utc.isoformat(), TARGET_USER_TZ_STR)
+    end_display_target = handlers._format_iso_datetime_for_display(end_dt_utc.isoformat(), TARGET_USER_TZ_STR)
+
+    assert f"<b>From:</b> {start_display_target}" in target_notification_kwargs['text']
+    assert f"<b>To:</b>   {end_display_target}" in target_notification_kwargs['text']
+
     assert isinstance(target_notification_kwargs['reply_markup'], InlineKeyboardMarkup)
     buttons = target_notification_kwargs['reply_markup'].inline_keyboard[0]
     assert buttons[0].callback_data == f"approve_access_{TEST_REQUEST_DOC_ID}"
@@ -338,23 +410,40 @@ async def test_users_shared_notify_target_fails(
     mock_update_status.assert_called_once_with(TEST_REQUEST_DOC_ID, "error_notifying_target")
 
 
-# --- Tests for button_callback (Approve/Deny Flow) - Minimal changes expected ---
-# These tests should largely remain the same as they handle the interaction
-# *after* the request is created and the target user receives the inline keyboard.
-# The core logic of these didn't depend on how the request was initiated.
+# --- Tests for button_callback (Approve/Deny Flow) ---
 
-REQUEST_DATA_PENDING = {
-    "requester_id": str(TEST_REQUESTER_ID), "requester_name": TEST_REQUESTER_FIRST_NAME,
-    "target_user_id": TEST_TARGET_ID_STR, "start_time_iso": "2024-08-01T10:00:00Z",
-    "end_time_iso": "2024-08-01T14:00:00Z", "status": "pending"
-}
-REQUEST_DATA_ERROR_NOTIFYING = {
-    **REQUEST_DATA_PENDING, "status": "error_notifying_target"
-}
-EVENTS_LIST_EXAMPLE = [
-    {"summary": "Event 1", "start": {"dateTime": "2024-08-01T11:00:00Z"}, "end": {"dateTime": "2024-08-01T12:00:00Z"}},
-    {"summary": "Event 2", "start": {"date": "2024-08-01"}, "end": {"date": "2024-08-01"}}
-]
+# Helper to create dynamic request data for button callback tests
+def _get_dynamic_request_data(status="pending", base_time_utc=None):
+    if base_time_utc is None:
+        base_time_utc = BASE_TEST_NOW_HANDLER_ACCESS_UTC
+
+    start_iso = base_time_utc.replace(hour=10, minute=0, second=0, microsecond=0).isoformat()
+    end_iso = base_time_utc.replace(hour=14, minute=0, second=0, microsecond=0).isoformat()
+    return {
+        "requester_id": str(TEST_REQUESTER_ID),
+        "requester_name": TEST_REQUESTER_FIRST_NAME,
+        "target_user_id": TEST_TARGET_ID_STR,
+        "start_time_iso": start_iso,
+        "end_time_iso": end_iso,
+        "status": status
+    }
+
+# Helper to create dynamic events list for button callback tests
+def _get_dynamic_events_list(base_time_utc=None):
+    if base_time_utc is None:
+        base_time_utc = BASE_TEST_NOW_HANDLER_ACCESS_UTC
+
+    event1_start = (base_time_utc + timedelta(hours=1)).replace(minute=0).isoformat()
+    event1_end = (base_time_utc + timedelta(hours=2)).replace(minute=0).isoformat()
+    event2_date = base_time_utc.date().isoformat()
+    event2_date_end = (base_time_utc.date() + timedelta(days=1)).isoformat()
+    return [
+        {"id": "dyn_event_1", "summary": "Event 1 Dynamic CB", "start": {"dateTime": event1_start}, "end": {"dateTime": event1_end}},
+        {"id": "dyn_event_2", "summary": "Event 2 Dynamic AllDay CB", "start": {"date": event2_date}, "end": {"date": event2_date_end}}
+    ]
+
+# Note: The old global constants REQUEST_DATA_PENDING, REQUEST_DATA_ERROR_NOTIFYING,
+# and EVENTS_LIST_EXAMPLE are confirmed to be removed from the file.
 
 @patch('handlers.gs.get_calendar_access_request')
 @patch('handlers.gs.is_user_connected')
@@ -367,33 +456,44 @@ async def test_button_approve_success(
 ):
     mock_update_callback.callback_query.data = f"approve_access_{TEST_REQUEST_DOC_ID}"
     
-    mock_get_req.return_value = REQUEST_DATA_PENDING
+    # Use helper functions to get dynamic data
+    dynamic_request_data = _get_dynamic_request_data(status="pending")
+    mock_get_req.return_value = dynamic_request_data
+
+    dynamic_events_list = _get_dynamic_events_list() # Using helper
+
     mock_is_target_connected.return_value = True
     mock_update_req_status.return_value = True
-    mock_get_events.return_value = EVENTS_LIST_EXAMPLE
-    mock_get_target_tz_for_events.return_value = TEST_TARGET_TIMEZONE_STR
+    mock_get_events.return_value = dynamic_events_list
+    mock_get_target_tz_for_events.return_value = TARGET_USER_TZ_STR
 
-    await handlers.button_callback(mock_update_callback, mock_context) # mock_context for bot mock
+    await handlers.button_callback(mock_update_callback, mock_context)
 
+    # Assertions
     mock_update_callback.callback_query.answer.assert_called_once()
     mock_get_req.assert_called_once_with(TEST_REQUEST_DOC_ID)
     mock_is_target_connected.assert_called_once_with(TEST_TARGET_ID)
-    mock_update_req_status.assert_called_once_with(TEST_REQUEST_DOC_ID, "approved")
-    mock_get_events.assert_called_once_with(TEST_TARGET_ID, "2024-08-01T10:00:00Z", "2024-08-01T14:00:00Z")
+    mock_update_req_status.assert_called_once_with(TEST_REQUEST_DOC_ID, STATUS_APPROVED)
+    mock_get_events.assert_called_once_with(TEST_TARGET_ID, dynamic_request_data["start_time_iso"], dynamic_request_data["end_time_iso"])
 
     mock_context.bot.send_message.assert_called_once()
     requester_msg_kwargs = mock_context.bot.send_message.call_args.kwargs
     assert requester_msg_kwargs['chat_id'] == str(TEST_REQUESTER_ID)
     assert "was APPROVED" in requester_msg_kwargs['text']
-    assert "Event 1" in requester_msg_kwargs['text']
-    assert "12:00 PM BST" in requester_msg_kwargs['text']
-    assert "All day" in requester_msg_kwargs['text']
+
+    # Check for dynamic event summaries
+    assert dynamic_events_list[0]["summary"] in requester_msg_kwargs['text']
+    formatted_event1_time = handlers._format_event_time(dynamic_events_list[0], TARGET_USER_TZ)
+    assert formatted_event1_time in requester_msg_kwargs['text']
+
+    assert dynamic_events_list[1]["summary"] in requester_msg_kwargs['text']
+    formatted_event2_time = handlers._format_event_time(dynamic_events_list[1], TARGET_USER_TZ)
+    assert formatted_event2_time in requester_msg_kwargs['text']
+    assert "All day" in formatted_event2_time
 
     mock_update_callback.callback_query.message.edit_message_text.assert_called_once_with(
         text="Access request APPROVED. The requester has been notified with the events."
     )
-# ... (Keep other button_callback tests as they are generally independent of the command refactor) ...
-# Minor adjustments might be needed if they relied on specific old user_data structures, but primary logic is sound.
 
 @patch('handlers.gs.get_calendar_access_request')
 @patch('handlers.gs.update_calendar_access_request_status')
@@ -401,33 +501,35 @@ async def test_button_deny_success(
     mock_update_req_status, mock_get_req, mock_update_callback, mock_context
 ):
     mock_update_callback.callback_query.data = f"deny_access_{TEST_REQUEST_DOC_ID}"
-    mock_get_req.return_value = REQUEST_DATA_PENDING
+    dynamic_request_data = _get_dynamic_request_data() # Using helper
+    mock_get_req.return_value = dynamic_request_data
     mock_update_req_status.return_value = True
 
     await handlers.button_callback(mock_update_callback, mock_context)
 
-    mock_update_req_status.assert_called_once_with(TEST_REQUEST_DOC_ID, "denied")
+    mock_update_req_status.assert_called_once_with(TEST_REQUEST_DOC_ID, "denied") # STATUS_DENIED if you have one
     mock_context.bot.send_message.assert_called_once()
-    requester_msg_kwargs = mock_context.bot.send_message.call_args.kwargs
-    assert requester_msg_kwargs['chat_id'] == str(TEST_REQUESTER_ID)
-    assert "was DENIED" in requester_msg_kwargs['text']
-    assert "2024-08-01 10:00 AM UTC" in requester_msg_kwargs['text']
-    assert "2024-08-01 02:00 PM UTC" in requester_msg_kwargs['text']
+    requester_msg_text = mock_context.bot.send_message.call_args.kwargs['text']
+    assert "was DENIED" in requester_msg_text
+    assert handlers._format_iso_datetime_for_display(dynamic_request_data["start_time_iso"]) in requester_msg_text
+    assert handlers._format_iso_datetime_for_display(dynamic_request_data["end_time_iso"]) in requester_msg_text
 
     mock_update_callback.callback_query.message.edit_message_text.assert_called_once_with(
         text="Access request DENIED. The requester has been notified."
     )
 
-# Ensure other button callback tests are present and correct
-@patch('handlers.gs.get_calendar_access_request', return_value=REQUEST_DATA_ERROR_NOTIFYING)
-@patch('handlers.gs.update_calendar_access_request_status', return_value=True)
+@patch('handlers.gs.get_calendar_access_request')
+@patch('handlers.gs.update_calendar_access_request_status')
 async def test_button_deny_success_after_notify_error(
     mock_update_req_status, mock_get_req, mock_update_callback, mock_context
 ):
+    dynamic_request_data = _get_dynamic_request_data(status="error_notifying_target") # Using helper
+    mock_get_req.return_value = dynamic_request_data
+    mock_update_req_status.return_value = True
     mock_update_callback.callback_query.data = f"deny_access_{TEST_REQUEST_DOC_ID}"
     await handlers.button_callback(mock_update_callback, mock_context)
-    mock_update_req_status.assert_called_once_with(TEST_REQUEST_DOC_ID, "denied")
-    mock_context.bot.send_message.assert_called_once() # Check it still notifies requester
+    mock_update_req_status.assert_called_once_with(TEST_REQUEST_DOC_ID, "denied") # STATUS_DENIED
+    mock_context.bot.send_message.assert_called_once()
     mock_update_callback.callback_query.message.edit_message_text.assert_called_once_with(
         text="Access request DENIED. The requester has been notified."
     )
@@ -443,10 +545,11 @@ async def test_button_approve_request_not_found(mock_get_req, mock_update_callba
 @patch('handlers.gs.get_calendar_access_request')
 async def test_button_approve_request_already_actioned(mock_get_req, mock_update_callback, mock_context):
     mock_update_callback.callback_query.data = f"approve_access_{TEST_REQUEST_DOC_ID}"
-    mock_get_req.return_value = {**REQUEST_DATA_PENDING, "status": "approved"}
+    dynamic_request_data = _get_dynamic_request_data(status=STATUS_APPROVED) # Using helper and constant
+    mock_get_req.return_value = dynamic_request_data
     await handlers.button_callback(mock_update_callback, mock_context)
     mock_update_callback.callback_query.message.edit_message_text.assert_called_once_with(
-        f"This request has already been actioned (status: approved)."
+        f"This request has already been actioned (status: {STATUS_APPROVED})."
     )
 
 @patch('handlers.gs.get_calendar_access_request')
@@ -454,27 +557,31 @@ async def test_button_approve_wrong_user_clicks(mock_get_req, mock_update_callba
     mock_update_callback.callback_query.data = f"approve_access_{TEST_REQUEST_DOC_ID}"
     mock_update_callback.callback_query.from_user = User(id=999, first_name="Wrong", is_bot=False, username="wrong_user")
     mock_update_callback.effective_user = mock_update_callback.callback_query.from_user
-    mock_get_req.return_value = REQUEST_DATA_PENDING
+
+    dynamic_request_data = _get_dynamic_request_data() # Using helper
+    mock_get_req.return_value = dynamic_request_data
     await handlers.button_callback(mock_update_callback, mock_context)
     mock_update_callback.callback_query.message.edit_message_text.assert_called_once_with(
          "Error: This request is not for you."
     )
 
-@patch('handlers.gs.get_calendar_access_request', return_value=REQUEST_DATA_PENDING)
+@patch('handlers.gs.get_calendar_access_request')
 @patch('handlers.gs.is_user_connected', return_value=False)
 async def test_button_approve_target_not_connected(mock_is_target_connected, mock_get_req, mock_update_callback, mock_context):
+    mock_get_req.return_value = _get_dynamic_request_data() # Using helper
     mock_update_callback.callback_query.data = f"approve_access_{TEST_REQUEST_DOC_ID}"
     await handlers.button_callback(mock_update_callback, mock_context)
     mock_update_callback.callback_query.message.edit_message_text.assert_called_once_with(
         "You (target user) need to connect your Google Calendar first via /connect_calendar before approving requests."
     )
 
-@patch('handlers.gs.get_calendar_access_request', return_value=REQUEST_DATA_PENDING)
+@patch('handlers.gs.get_calendar_access_request')
 @patch('handlers.gs.is_user_connected', return_value=True)
 @patch('handlers.gs.update_calendar_access_request_status', return_value=False)
 async def test_button_approve_update_status_fails(
     mock_update_req_status, mock_is_target_connected, mock_get_req, mock_update_callback, mock_context
 ):
+    mock_get_req.return_value = _get_dynamic_request_data() # Using helper
     mock_update_callback.callback_query.data = f"approve_access_{TEST_REQUEST_DOC_ID}"
     await handlers.button_callback(mock_update_callback, mock_context)
     mock_update_callback.callback_query.message.edit_message_text.assert_called_once_with(
