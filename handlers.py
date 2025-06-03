@@ -13,7 +13,15 @@ from pytz.exceptions import UnknownTimeZoneError
 
 import config
 import google_services as gs  # For Calendar and Auth services
-from google_services import add_pending_event, get_pending_event, delete_pending_event, add_pending_deletion, get_pending_deletion, delete_pending_deletion
+from google_services import (
+    add_pending_event,
+    get_pending_event,
+    delete_pending_event,
+    add_pending_deletion,
+    get_pending_deletion,
+    delete_pending_deletion,
+)
+import grocery_services as gls
 from handler.message_formatter import create_final_message
 from llm import llm_service
 from llm.agent import initialize_agent
@@ -1114,7 +1122,7 @@ async def glist_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     items_to_add = list(context.args) # context.args is a tuple
 
-    if await gs.add_to_grocery_list(user_id, items_to_add): # MODIFIED
+    if await gls.add_to_grocery_list(user_id, items_to_add):
         logger.info(f"Successfully added {len(items_to_add)} items for user {user_id}.")
         await update.message.reply_text(
             f"Added: {', '.join(items_to_add)} to your grocery list."
@@ -1131,7 +1139,7 @@ async def glist_show(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     user_id = update.effective_user.id
     logger.info(f"User {user_id} requesting to show grocery list.")
 
-    grocery_list = await gs.get_grocery_list(user_id) # MODIFIED
+    grocery_list = await gls.get_grocery_list(user_id)
 
     if grocery_list is None:
         logger.error(f"Failed to retrieve grocery list for user {user_id} (gs returned None).")
@@ -1157,7 +1165,7 @@ async def glist_clear(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     user_id = update.effective_user.id
     logger.info(f"User {user_id} requesting to clear grocery list.")
 
-    if await gs.delete_grocery_list(user_id): # MODIFIED
+    if await gls.delete_grocery_list(user_id):
         logger.info(f"Successfully cleared grocery list for user {user_id}.")
         await update.message.reply_text("🗑️ Your grocery list has been cleared.")
     else:
