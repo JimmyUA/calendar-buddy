@@ -92,7 +92,7 @@ class TestEscapeMarkdownV2:
         # Assuming \ is NOT a character that escape_markdown_v2 itself escapes.
         # So, "Hello \(world\)" becomes "Hello \\\(world\\\)"
         # because '(' and ')' are escaped.
-        original = "Hello \(world\)" # Input string itself has escapes
+        original = r"Hello \(world\)" # Changed to raw string
         expected = r"Hello \\\(world\\\)" # Expected output also needs to be raw or double-escaped
         assert escape_markdown_v2(original) == expected
 

@@ -1,17 +1,19 @@
 # --- Telegram Bot ---
 python-telegram-bot>=20.6,<22.0
 
-# --- Langchain Core & Integrations ---
-langchain>=0.2.0
-langchain-core>=0.2.0
-langchain-google-genai>=1.0.0
-langchain-community>=0.2.0
+# --- Langchain Core & Integrations (Pinned for compatibility) ---
+langchain==0.1.9
+langchain-core==0.1.26
+langchain-google-genai==1.0.1
+langchain-community==0.0.22
 
-# --- Google Cloud & API Libraries ---
+# --- Google Cloud & API Libraries (Pinned for compatibility) ---
+google-generativeai==0.4.1
 google-cloud-firestore>=2.11.0
 google-api-python-client>=2.80.0
 google-auth-oauthlib>=1.0.0
 google-auth-httplib2>=0.1.0
+google-cloud-secret-manager>=2.16.0
 
 # --- Date/Time Handling ---
 pytz>=2023.3
@@ -25,6 +27,4 @@ gunicorn>=21.2.0
 python-dotenv>=1.0.0
 httpx>=0.24.0
 
-# --- Pydantic will be installed as a dependency of langchain-core ---
-google-generativeai>=0.3.0 # Or a more recent version if known, e.g., >=0.5.0
-google-cloud-secret-manager>=2.16.0
+# --- Other dependencies like Pydantic will be handled by the pinned libraries above ---

@@ -901,8 +901,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             logger.info(f"[REQ_ID: {request_id}] gs.get_calendar_events returned at {time.time()}")
 
             escaped_requester_name = escape_markdown_v2(str(request_data.get('requester_name', 'them')))
-            events_summary_message = f"🗓️ Calendar events for {escaped_requester_name} " \
-                                     f"\(from your calendar\) for the period:\n" # Note the escaped \( and \)
+            # Use r-string for the initial part to avoid issues with \( and \)
+            events_summary_message = rf"🗓️ Calendar events for {escaped_requester_name} " \
+                                     rf"\(from your calendar\) for the period:\n"
             target_tz_str = await gs.get_user_timezone_str(int(target_user_id)) # MODIFIED
             target_tz = pytz.timezone(target_tz_str) if target_tz_str else pytz.utc
 
@@ -923,21 +924,21 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
                     summary_text = escape_markdown_v2(summary_content_for_escaping)
                     escaped_time_str = escape_markdown_v2(time_str)
-# Simplified format for diagnostics
-                    events_summary_message += f"\nEvent: {summary_text} \(Time: {escaped_time_str}\)"
+                    # Use r-string for this part
+                    events_summary_message += rf"\nEvent: {summary_text} \(Time: {escaped_time_str}\)"
             
             try:
                 logger.info(f"[REQ_ID: {request_id}] About to send message to requester at {time.time()}")
 
-                # Escape dynamic parts for the main message
                 target_user_display = escape_markdown_v2(str(request_data.get('target_user_id', 'the user')))
                 period_start_display = escape_markdown_v2(_format_iso_datetime_for_display(start_time_iso))
                 period_end_display = escape_markdown_v2(_format_iso_datetime_for_display(end_time_iso))
 
+                # Use r-string for the main structure
                 requester_notification_text = (
-                    f"🎉 Your calendar access request for {target_user_display} "
-                    f"\(for period {period_start_display} to {period_end_display}\) was APPROVED\.\n\n"  # Escaped \(, \), and \.
-                    f"{events_summary_message}" # events_summary_message components are already individually escaped
+                    rf"🎉 Your calendar access request for {target_user_display} "
+                    rf"\(for period {period_start_display} to {period_end_display}\) was APPROVED\."
+                    rf"\n\n{events_summary_message}" # events_summary_message is already correctly escaped
                 )
 
                 await context.bot.send_message(

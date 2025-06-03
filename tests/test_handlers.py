@@ -10,13 +10,14 @@ import config
 import handlers
 from .conftest import TEST_USER_ID, TEST_TIMEZONE_STR, TEST_TIMEZONE # Import TEST_TIMEZONE
 from datetime import datetime, timedelta # For dynamic dates
+import pytz # Added import
 
 pytestmark = pytest.mark.asyncio
 
 # Use a fixed "now" for predictable test results across runs, from conftest or define locally
 # For handlers, it's often about relative times ("tomorrow", "next week")
 # Let's use a fixed base now, similar to test_agent_tools
-BASE_TEST_NOW_UTC_HANDLERS = datetime(2024, 8, 19, 17, 0, 0, tzinfo=config.pytz.utc)
+BASE_TEST_NOW_UTC_HANDLERS = datetime(2024, 8, 19, 17, 0, 0, tzinfo=pytz.utc) # Changed config.pytz to pytz
 BASE_TEST_NOW_USER_TZ_HANDLERS = BASE_TEST_NOW_UTC_HANDLERS.astimezone(TEST_TIMEZONE)
 
 

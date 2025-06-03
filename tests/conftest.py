@@ -44,94 +44,99 @@ TEST_TIMEZONE_STR = "America/Los_Angeles" # Example, ensure it's valid for pytz
 TEST_TIMEZONE = pytz.timezone(TEST_TIMEZONE_STR) if TEST_TIMEZONE_STR else pytz.utc
 TEST_EVENT_ID = "google_event_id_123"
 
+# --- Global Firestore Mocking Setup ---
+# Create the mock instance that will be used by firestore.Client
+MOCK_FIRESTORE_CLIENT_INSTANCE = MagicMock(name="GlobalMockFirestoreClientInstance")
+
+# Configure the MOCK_FIRESTORE_CLIENT_INSTANCE as it was in the original fixture
+mock_collection_obj = MagicMock(name="MockCollection")
+mock_document_obj = MagicMock(name="MockDocument")
+mock_snapshot_obj = MagicMock(name="MockSnapshot")
+mock_query_obj = MagicMock(name="MockQuery")
+
+MOCK_FIRESTORE_CLIENT_INSTANCE.collection.return_value = mock_collection_obj
+mock_collection_obj.document.return_value = mock_document_obj
+mock_collection_obj.where.return_value = mock_query_obj
+mock_collection_obj.order_by.return_value = mock_query_obj
+mock_collection_obj.limit.return_value = mock_query_obj
+mock_collection_obj.stream.return_value = []
+mock_collection_obj.add = MagicMock(name="MockCollectionAdd", return_value=(MagicMock(id="new_doc_id"), None))
+
+mock_query_obj.where.return_value = mock_query_obj
+mock_query_obj.order_by.return_value = mock_query_obj
+mock_query_obj.limit.return_value = mock_query_obj
+mock_query_obj.stream.return_value = []
+
+mock_document_obj.get.return_value = mock_snapshot_obj
+mock_document_obj.set = MagicMock(name="MockDocSet")
+mock_document_obj.delete = MagicMock(name="MockDocDelete")
+mock_document_obj.update = MagicMock(name="MockDocUpdate")
+mock_document_obj.collection.return_value = mock_collection_obj
+
+mock_snapshot_obj.exists = False
+mock_snapshot_obj.to_dict.return_value = {}
+mock_snapshot_obj.get = MagicMock(name="MockSnapshotGetField", return_value=None)
+mock_snapshot_obj.id = "mock_snapshot_id"
+
+def _set_global_snapshot_data(data_dict, exists_val=True, doc_id="mock_snapshot_id"):
+    mock_snapshot_obj.exists = exists_val
+    mock_snapshot_obj.to_dict.return_value = data_dict if exists_val else {}
+    mock_snapshot_obj.id = doc_id
+    if exists_val and isinstance(data_dict, dict):
+        mock_snapshot_obj.get = lambda key, default=None: data_dict.get(key, default)
+        mock_snapshot_obj.reference = MagicMock(id=doc_id)
+    else:
+        mock_snapshot_obj.get = MagicMock(name="MockSnapshotGetField_NotExists", return_value=None)
+        mock_snapshot_obj.reference = MagicMock(id=doc_id)
+mock_snapshot_obj.configure_mock_data = _set_global_snapshot_data
+
+mock_batch_obj = MagicMock(name="MockBatch")
+mock_batch_obj.commit = MagicMock(name="MockBatchCommit")
+mock_batch_obj.set = MagicMock(name="MockBatchSet")
+mock_batch_obj.update = MagicMock(name="MockBatchUpdate")
+mock_batch_obj.delete = MagicMock(name="MockBatchDelete")
+MOCK_FIRESTORE_CLIENT_INSTANCE.batch.return_value = mock_batch_obj
+
+mock_transaction_obj = MagicMock(name="MockTransaction")
+mock_transaction_obj.set = MagicMock(name="MockTransactionSet")
+mock_transaction_obj.update = MagicMock(name="MockTransactionUpdate")
+mock_transaction_obj.delete = MagicMock(name="MockTransactionDelete")
+MOCK_FIRESTORE_CLIENT_INSTANCE.transaction.return_value = mock_transaction_obj
+
+# Apply the patch at the module level.
+# This ensures 'google.cloud.firestore.Client' is patched when config.py is imported.
+GLOBAL_FIRESTORE_PATCHER = patch('google.cloud.firestore.Client', return_value=MOCK_FIRESTORE_CLIENT_INSTANCE)
+GLOBAL_FIRESTORE_PATCHER.start()
+print("\nGlobally patched google.cloud.firestore.Client at conftest.py module level.")
+
+# Fixture to provide the globally mocked client instance and its components
+# This replaces the old mock_firestore_client_globally that also did the patching.
+@pytest.fixture(scope="session") # No autouse needed, mock_firestore_db will depend on it
+def globally_mocked_firestore_client_instance():
+    # The patch is already active. This fixture just provides the instance.
+    yield MOCK_FIRESTORE_CLIENT_INSTANCE
+    # The patcher will be stopped by pytest_sessionfinish if needed, or manage explicitly.
+    # For simplicity, let's keep it active for the whole session. If issues arise,
+    # we can implement explicit stop in pytest_sessionfinish.
+
 # --- NEW: Fixture to mock Firestore client globally for tests ---
-@pytest.fixture(scope="session", autouse=True)
-def mock_firestore_client_globally():
-    """
-    Mocks the firestore.Client constructor *before* config.py tries to use it.
-    This prevents the real client from initializing and failing.
-    Uses unittest.mock.patch directly for session scope.
-    """
-    mock_client_instance = MagicMock(name="MockFirestoreClientInstance")
-
-    mock_collection_obj = MagicMock(name="MockCollection")
-    mock_document_obj = MagicMock(name="MockDocument")
-    mock_snapshot_obj = MagicMock(name="MockSnapshot")
-    mock_query_obj = MagicMock(name="MockQuery") # For query chains
-
-    mock_client_instance.collection.return_value = mock_collection_obj
-    mock_collection_obj.document.return_value = mock_document_obj
-    # Query methods on collection
-    mock_collection_obj.where.return_value = mock_query_obj
-    mock_collection_obj.order_by.return_value = mock_query_obj
-    mock_collection_obj.limit.return_value = mock_query_obj
-    mock_collection_obj.stream.return_value = [] # Default for collection.stream()
-    mock_collection_obj.add = MagicMock(name="MockCollectionAdd", return_value=(MagicMock(id="new_doc_id"), None)) # add() returns (doc_ref, write_result)
-    # Query methods on query object
-    mock_query_obj.where.return_value = mock_query_obj # Allow multiple .where calls
-    mock_query_obj.order_by.return_value = mock_query_obj
-    mock_query_obj.limit.return_value = mock_query_obj
-    mock_query_obj.stream.return_value = [] # Default for query.stream()
-
-    mock_document_obj.get.return_value = mock_snapshot_obj
-    mock_document_obj.set = MagicMock(name="MockDocSet")
-    mock_document_obj.delete = MagicMock(name="MockDocDelete")
-    mock_document_obj.update = MagicMock(name="MockDocUpdate")
-    # Collection reference for subcollections
-    mock_document_obj.collection.return_value = mock_collection_obj # Subcollections return a collection mock
-
-    mock_snapshot_obj.exists = False
-    mock_snapshot_obj.to_dict.return_value = {}
-    mock_snapshot_obj.get = MagicMock(name="MockSnapshotGetField", return_value=None)
-    # Add id to snapshot mock
-    mock_snapshot_obj.id = "mock_snapshot_id"
-
-
-    def _set_snapshot_data(data_dict, exists_val=True, doc_id="mock_snapshot_id"):
-        mock_snapshot_obj.exists = exists_val
-        mock_snapshot_obj.to_dict.return_value = data_dict if exists_val else {}
-        mock_snapshot_obj.id = doc_id
-        if exists_val and isinstance(data_dict, dict):
-            # Make .get() behave like a dict.get
-            mock_snapshot_obj.get = lambda key, default=None: data_dict.get(key, default)
-            # Ensure .reference is a mock with an id attribute
-            mock_snapshot_obj.reference = MagicMock(id=doc_id)
-        else:
-            mock_snapshot_obj.get = MagicMock(name="MockSnapshotGetField_NotExists", return_value=None)
-            mock_snapshot_obj.reference = MagicMock(id=doc_id)
-
-
-    mock_snapshot_obj.configure_mock_data = _set_snapshot_data
-
-    # Batch and Transaction
-    mock_batch_obj = MagicMock(name="MockBatch")
-    mock_batch_obj.commit = MagicMock(name="MockBatchCommit")
-    mock_batch_obj.set = MagicMock(name="MockBatchSet")
-    mock_batch_obj.update = MagicMock(name="MockBatchUpdate")
-    mock_batch_obj.delete = MagicMock(name="MockBatchDelete")
-    mock_client_instance.batch.return_value = mock_batch_obj
-
-    mock_transaction_obj = MagicMock(name="MockTransaction")
-    mock_transaction_obj.set = MagicMock(name="MockTransactionSet")
-    mock_transaction_obj.update = MagicMock(name="MockTransactionUpdate")
-    mock_transaction_obj.delete = MagicMock(name="MockTransactionDelete")
-    # mock_transaction_obj.get = ... # If transactions need to control .get() behavior directly
-    mock_client_instance.transaction.return_value = mock_transaction_obj
-    # --- End of mock_client_instance setup ---
-
-    print("\nStarting global patch for google.cloud.firestore.Client (session scope)...")
-    patcher = patch('google.cloud.firestore.Client', return_value=mock_client_instance)
-
-    patcher.start()  # Start the patch
-    yield mock_client_instance  # This is what config.FIRESTORE_DB will be assigned
-
-    print("\nStopping global patch for google.cloud.firestore.Client (session scope)...")
-    patcher.stop()  # Ensure patch is stopped
+@pytest.fixture(scope="session", autouse=True) # This autouse fixture is now just for ensuring the patch is managed
+def manage_global_firestore_patch():
+    """Ensures the global Firestore patch is active for the session."""
+    # Patch was started at module level.
+    # This fixture could be used to stop it at session end if necessary,
+    # but pytest usually handles cleanup of module-level patches if they are managed by `patch`.
+    # For now, this fixture doesn't need to do much more if patcher is module level.
+    # If we needed to stop it:
+    yield
+    # GLOBAL_FIRESTORE_PATCHER.stop() # This would stop it after all tests.
+    # print("\nStopped global patch for google.cloud.firestore.Client (session scope)...")
 
 
 # --- Mock Telegram Objects ---
 @pytest.fixture
 def mock_user():
+    user = MagicMock(name="MockUser")
     user = MagicMock(name="MockUser")
     user.id = TEST_USER_ID
     user.username = TEST_USERNAME
@@ -350,26 +355,3 @@ def mock_firestore_db(mock_firestore_client_globally): # Depends on the global m
         "transaction": db_instance.transaction() # Return the transaction mock
     }
 
-
-@pytest.fixture(autouse=True)
-def patch_config_dictionaries_in_memory(mocker):
-    """
-    Clears the module-level dictionaries in config.py before each test.
-    This is for in-memory state, not Firestore.
-    It patches the dictionaries themselves to be empty.
-    """
-    # We need to import config *after* the global Firestore mock is in place
-    # to avoid the real Firestore init error.
-    # This fixture will run for every test.
-    try:
-        import config
-        # Use patch.dict to modify the dictionaries in place for the duration of the test
-        mocker.patch.dict(config.pending_events, clear=True)
-        mocker.patch.dict(config.pending_deletions, clear=True)
-    except RuntimeError as e:
-        # This might happen if config.py still fails to import due to other reasons
-        # (e.g., missing environment variables if pytest-dotenv/pytest_configure isn't working)
-        print(f"Warning: Could not patch config dictionaries due to import error: {e}")
-        # Depending on your setup, you might want to raise this or just warn.
-        # If tests rely on these being clear, they might fail if this patching doesn't happen.
-        pass
