@@ -2,7 +2,7 @@ import logging
 from typing import Type
 from pydantic import BaseModel # No specific args
 from langchain.tools import BaseTool
-import google_services as gs
+import grocery_services as gs
 
 logger = logging.getLogger(__name__)
 

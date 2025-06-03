@@ -84,7 +84,7 @@ def tools(monkeypatch):
     config_mod.OAUTH_REDIRECT_URI = ""
     monkeypatch.setitem(sys.modules, "config", config_mod)
 
-    gs_mod = types.ModuleType("google_services")
+    gs_mod = types.ModuleType("grocery_services")
     from unittest.mock import MagicMock
     gs_mod.add_to_grocery_list = lambda *a, **k: True
     gs_mod.delete_grocery_list = lambda *a, **k: True
@@ -102,6 +102,7 @@ def tools(monkeypatch):
     gs_mod.get_calendar_events = AsyncMock(return_value=[{"id": "ev1"}])
     gs_mod.search_calendar_events = AsyncMock(return_value=[{"id": "ev2"}])
     sys.modules["google_services"] = gs_mod
+    sys.modules["grocery_services"] = gs_mod
 
     llm_service_mod = types.ModuleType("llm.llm_service")
     llm_service_mod.extract_create_args_llm = AsyncMock(return_value={
@@ -180,7 +181,7 @@ def test_show_grocery_list(tools):
 
 
 def test_show_grocery_list_empty(tools, monkeypatch):
-    gs = sys.modules["google_services"]
+    gs = sys.modules["grocery_services"]
     gs.get_grocery_list.return_value = []
     tool_cls = tools["show_grocery_list_tool"].ShowGroceryListTool
     tool = tool_cls(user_id=1, user_timezone_str="UTC")

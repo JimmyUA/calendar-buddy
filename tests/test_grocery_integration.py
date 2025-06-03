@@ -52,7 +52,7 @@ class FakeCollection:
 
 @pytest.fixture
 def gs_module(monkeypatch):
-    # stub config before importing google_services
+    # stub config before importing grocery_services
     config_mod = types.ModuleType("config")
     config_mod.FIRESTORE_DB = None
     config_mod.FS_COLLECTION_GROCERY_LISTS = "grocery"
@@ -155,9 +155,9 @@ def gs_module(monkeypatch):
     monkeypatch.setitem(sys.modules, "google.api_core.exceptions", exceptions_mod)
 
     # ensure clean import
-    if "google_services" in sys.modules:
-        del sys.modules["google_services"]
-    gs = importlib.import_module("google_services")
+    if "grocery_services" in sys.modules:
+        del sys.modules["grocery_services"]
+    gs = importlib.import_module("grocery_services")
 
     # replace the Firestore collection with our fake implementation
     fake_collection = FakeCollection()
