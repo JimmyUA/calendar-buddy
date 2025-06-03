@@ -190,3 +190,17 @@ def test_start_sends_welcome_message(handlers_module):
     asyncio.run(handlers_module.start(mock_update, mock_context))
 
     mock_message.reply_html.assert_called_once()
+
+
+def test_menu_command_shows_keyboard(handlers_module):
+    mock_update = MagicMock()
+    mock_message = MagicMock()
+    mock_message.reply_text = AsyncMock()
+    mock_update.message = mock_message
+    mock_update.effective_user = MagicMock()
+
+    mock_context = MagicMock()
+
+    asyncio.run(handlers_module.menu_command(mock_update, mock_context))
+
+    mock_message.reply_text.assert_called_once()
