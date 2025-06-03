@@ -1,6 +1,8 @@
 # tests/conftest.py
 import pytest
 import pytest_asyncio
+
+pytest_plugins = ["pytest_mock"]
 from unittest.mock import MagicMock, AsyncMock, patch
 import datetime
 import pytz

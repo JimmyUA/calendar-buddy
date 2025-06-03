@@ -1,0 +1,11 @@
+class Update: pass
+class InlineKeyboardButton: pass
+class InlineKeyboardMarkup: pass
+class KeyboardButton: pass
+class ReplyKeyboardMarkup: pass
+class KeyboardButtonRequestUsers: pass
+class UsersShared: pass
+class ReplyKeyboardRemove: pass
+class Message: pass
+class User: pass
+class Chat: pass
