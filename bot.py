@@ -92,6 +92,7 @@ def main() -> None:
     # Commands
     application.add_handler(CommandHandler("start", handlers.start))
     application.add_handler(CommandHandler("help", handlers.help_command))
+    application.add_handler(CommandHandler("menu", handlers.menu_command))
     application.add_handler(CommandHandler("connect_calendar", handlers.connect_calendar))
     application.add_handler(CommandHandler("my_status", handlers.my_status))
     application.add_handler(CommandHandler("disconnect_calendar", handlers.disconnect_calendar))
