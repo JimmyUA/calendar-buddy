@@ -77,12 +77,12 @@ class TestEscapeMarkdownV2:
     def test_all_special_chars(self):
         # _ * [ ] ( ) ~ ` > # + - = | { } . !
         original = "_*[]()~`>#+-=|{}.!"
-        expected = "\_\*\[\]\(\)\~\`\>\#\+\-\=\|\{\}\.\!"
+        expected = r"\_\*\[\]\(\)\~\`\>\#\+\-\=\|\{\}\.\!"  # Changed to raw string
         assert escape_markdown_v2(original) == expected
 
     def test_mixed_content(self):
         original = "This is a (test). It should *work*! #important"
-        expected = "This is a \(test\)\. It should \*work\*\! \#important"
+        expected = r"This is a \(test\)\. It should \*work\*\! \#important"  # Changed to raw string
         assert escape_markdown_v2(original) == expected
 
     def test_empty_string(self):
@@ -92,16 +92,16 @@ class TestEscapeMarkdownV2:
         # Assuming \ is NOT a character that escape_markdown_v2 itself escapes.
         # So, "Hello \(world\)" becomes "Hello \\\(world\\\)"
         # because '(' and ')' are escaped.
-        original = "Hello \(world\)"
-        expected = "Hello \\\(world\\\)"
+        original = "Hello \(world\)" # Input string itself has escapes
+        expected = r"Hello \\\(world\\\)" # Expected output also needs to be raw or double-escaped
         assert escape_markdown_v2(original) == expected
 
     def test_only_special_chars_short(self):
         original = ".-_"
-        expected = "\.\-\_"
+        expected = r"\.\-\_" # Changed to raw string
         assert escape_markdown_v2(original) == expected
 
     def test_numbers_and_special_chars(self):
         original = "1. Item (first)"
-        expected = "1\. Item \(first\)"
+        expected = r"1\. Item \(first\)" # Changed to raw string
         assert escape_markdown_v2(original) == expected

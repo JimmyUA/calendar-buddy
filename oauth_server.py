@@ -124,6 +124,3 @@ if __name__ == '__main__':
         logger.info(f"Starting OAuth callback server on {config.WEB_SERVER_HOST}:{config.WEB_SERVER_PORT}")
         # Use waitress or gunicorn for production instead of Flask's dev server
         app.run(host=config.WEB_SERVER_HOST, port=config.WEB_SERVER_PORT, debug=False)
-
-
-281276958363-eq20la3m4cv7r8hssv75555u5n2v3mv0.apps.googleusercontent.com

@@ -118,10 +118,10 @@ async def test_disconnect_calendar(mock_update, mock_context, mocker):
     mock_delete_token.assert_awaited_once_with(TEST_USER_ID)
     mock_delete_pending_event.assert_awaited_once_with(TEST_USER_ID)
     mock_delete_pending_deletion.assert_awaited_once_with(TEST_USER_ID)
-        mock_update.effective_message.reply_text.assert_called_once_with(
-            "Calendar connection removed."
-        )
-        # Assert pending states were cleared for the user - this check is now implicit in gs calls
+    mock_update.effective_message.reply_text.assert_called_once_with(
+        "Calendar connection removed."
+    )
+    # Assert pending states were cleared for the user - this check is now implicit in gs calls
 
 
 # --- Timezone Conversation ---
