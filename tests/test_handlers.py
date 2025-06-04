@@ -205,7 +205,6 @@ def test_menu_command_shows_main_menu(handlers_module):
 
     mock_message.reply_text.assert_called_once()
 
-
 def test_menu_calendar_shows_submenu(handlers_module):
     mock_update = MagicMock()
     mock_message = MagicMock()
