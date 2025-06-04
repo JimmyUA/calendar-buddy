@@ -86,9 +86,16 @@ def tools(monkeypatch):
 
     gs_mod = types.ModuleType("grocery_services")
     from unittest.mock import MagicMock
-    gs_mod.add_to_grocery_list = lambda *a, **k: True
-    gs_mod.delete_grocery_list = lambda *a, **k: True
-    gs_mod.get_grocery_list = MagicMock(return_value=["milk"])
+
+    async def async_true(*args, **kwargs):
+        return True
+
+    async def async_list(*args, **kwargs):
+        return ["milk"]
+
+    gs_mod.add_to_grocery_list = async_true
+    gs_mod.delete_grocery_list = async_true
+    gs_mod.get_grocery_list = MagicMock(side_effect=async_list)
     gs_mod.add_pending_event = AsyncMock(return_value=True)
     gs_mod.delete_pending_deletion = lambda *a, **k: None
     gs_mod.get_calendar_event_by_id = AsyncMock(return_value={
@@ -182,7 +189,9 @@ def test_show_grocery_list(tools):
 
 def test_show_grocery_list_empty(tools, monkeypatch):
     gs = sys.modules["grocery_services"]
-    gs.get_grocery_list.return_value = []
+    async def empty_list(*args, **kwargs):
+        return []
+    gs.get_grocery_list.side_effect = empty_list
     tool_cls = tools["show_grocery_list_tool"].ShowGroceryListTool
     tool = tool_cls(user_id=1, user_timezone_str="UTC")
     result = tool._run()

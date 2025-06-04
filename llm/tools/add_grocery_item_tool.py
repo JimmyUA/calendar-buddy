@@ -1,4 +1,5 @@
 import logging
+import asyncio
 from typing import Type, List
 from pydantic import BaseModel, Field
 from langchain.tools import BaseTool
@@ -17,25 +18,33 @@ class AddGroceryItemTool(BaseTool):
     user_timezone_str: str # Set during instantiation, though not strictly needed for this tool
 
     def _run(self, items: str) -> str:
-        logger.info(f"AddGroceryItemTool: Called for user {self.user_id} with items: {items}")
+        return asyncio.run(self._arun(items))
+
+    async def _arun(self, items: str) -> str:
+        logger.info(
+            f"AddGroceryItemTool: Called for user {self.user_id} with items: {items}"
+        )
         if not items or not isinstance(items, str):
             return "Input error: Please provide items as a comma-separated string."
 
         # Simple parsing: split by comma and strip whitespace
-        item_list = [item.strip() for item in items.split(',') if item.strip()]
+        item_list = [item.strip() for item in items.split(",") if item.strip()]
 
         if not item_list:
-            return "Input error: No valid items provided after parsing. Please provide items like 'milk, eggs'."
+            return (
+                "Input error: No valid items provided after parsing. Please provide items like 'milk, eggs'."
+            )
 
         try:
-            if gs.add_to_grocery_list(self.user_id, item_list):
-                return f"Successfully added: {', '.join(item_list)} to your grocery list."
+            if await gs.add_to_grocery_list(self.user_id, item_list):
+                return (
+                    f"Successfully added: {', '.join(item_list)} to your grocery list."
+                )
             else:
                 return "Failed to add items to the grocery list due to a service error."
         except Exception as e:
-            logger.error(f"Error in AddGroceryItemTool for user {self.user_id}: {e}", exc_info=True)
+            logger.error(
+                f"Error in AddGroceryItemTool for user {self.user_id}: {e}",
+                exc_info=True,
+            )
             return "An unexpected error occurred while trying to add items."
-    
-    async def _arun(self, items: str) -> str:
-        # For simplicity, using the sync version. Implement async if gs calls are async.
-        return self._run(items)

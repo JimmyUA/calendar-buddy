@@ -1,6 +1,7 @@
 import logging
+import asyncio
 from typing import Type
-from pydantic import BaseModel # No specific args needed for this tool
+from pydantic import BaseModel  # No specific args needed for this tool
 from langchain.tools import BaseTool
 import grocery_services as gs
 
@@ -17,9 +18,12 @@ class ShowGroceryListTool(BaseTool):
     user_timezone_str: str # Not used, but part of the pattern
 
     def _run(self) -> str:
+        return asyncio.run(self._arun())
+
+    async def _arun(self) -> str:
         logger.info(f"ShowGroceryListTool: Called for user {self.user_id}")
         try:
-            grocery_list = gs.get_grocery_list(self.user_id)
+            grocery_list = await gs.get_grocery_list(self.user_id)
             if grocery_list is None:
                 return "Error: Could not retrieve the grocery list at the moment."
             elif not grocery_list:
@@ -27,8 +31,8 @@ class ShowGroceryListTool(BaseTool):
             else:
                 return f"Your grocery list: {', '.join(grocery_list)}."
         except Exception as e:
-            logger.error(f"Error in ShowGroceryListTool for user {self.user_id}: {e}", exc_info=True)
+            logger.error(
+                f"Error in ShowGroceryListTool for user {self.user_id}: {e}",
+                exc_info=True,
+            )
             return "An unexpected error occurred while trying to show the grocery list."
-
-    async def _arun(self) -> str:
-        return self._run()
