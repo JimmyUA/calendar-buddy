@@ -23,6 +23,20 @@ class CalendarAccessRequest(BaseModel):
         # Allow Firestore SERVER_TIMESTAMP to be used
         arbitrary_types_allowed = True
 
+
+class GroceryShareRequest(BaseModel):
+    """Represents a request to share grocery lists between users."""
+
+    requester_id: str
+    requester_name: str
+    target_user_id: str
+    status: str = "pending"
+    request_timestamp: Any = None
+    response_timestamp: Optional[Any] = None
+
+    class Config:
+        arbitrary_types_allowed = True
+
 if __name__ == '__main__':
     # Example usage:
     # This is just for demonstration and won't be part of the actual application logic

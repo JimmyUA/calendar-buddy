@@ -103,6 +103,7 @@ def main() -> None:
     application.add_handler(CommandHandler("glist_add", handlers.glist_add))
     application.add_handler(CommandHandler("glist_show", handlers.glist_show))
     application.add_handler(CommandHandler("glist_clear", handlers.glist_clear))
+    application.add_handler(CommandHandler("share_glist", handlers.share_glist_command))
 
     # Message Handler (for natural language processing)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.handle_message))

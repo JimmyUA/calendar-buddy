@@ -385,6 +385,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     /glist_add `<item1> [item2 ...]` - Adds items to your grocery list.
     /glist_show - Shows your current grocery list.
     /glist_clear - Clears your entire grocery list.
+    /share_glist - Share your grocery list with another user.
     /request_access `<time_period>` - Request calendar access from another user for a specific period.
     /help - Show this help message.
     """
@@ -399,7 +400,8 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         ["/set_timezone", "/disconnect_calendar"],
         ["/summary", "/glist_add"],
         ["/glist_show", "/glist_clear"],
-        ["/request_access", "/help"],
+        ["/share_glist", "/request_access"],
+        ["/help"],
     ]
     try:
         reply_markup = ReplyKeyboardMarkup(
@@ -501,6 +503,51 @@ async def request_calendar_access_command(update: Update, context: ContextTypes.
     logger.info(f"User {requester_id} prompted to select target user for calendar access request (KB request ID: {keyboard_request_id}).")
 
 
+async def _handle_glist_share_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Processes the selected user to share grocery list with."""
+    assert update.message is not None and update.message.users_shared is not None
+    requester_id = str(update.effective_user.id)
+    received_request_id = update.message.users_shared.request_id
+    expected_request_id = context.user_data.pop("select_user_request_id", None)
+
+    if expected_request_id is None or received_request_id != expected_request_id:
+        await context.bot.send_message(chat_id=requester_id, text="This user selection is invalid or expired.")
+        return
+
+    if not update.message.users_shared.users:
+        await context.bot.send_message(chat_id=requester_id, text="No user was selected.")
+        return
+
+    target_user = update.message.users_shared.users[0]
+    target_user_id = str(target_user.user_id)
+    if target_user_id == requester_id:
+        await context.bot.send_message(chat_id=requester_id, text="You cannot share the list with yourself.")
+        return
+
+    requester_name = update.effective_user.first_name or "User"
+    request_doc_id = await gs.add_grocery_share_request(requester_id, requester_name, target_user_id)
+    if not request_doc_id:
+        await context.bot.send_message(chat_id=requester_id, text="Failed to store share request.")
+        return
+
+    await context.bot.send_message(
+        chat_id=requester_id,
+        text=f"Grocery list share request sent to {target_user.first_name or target_user.username}."
+    )
+
+    inline_keyboard = [
+        [
+            InlineKeyboardButton("✅ Accept", callback_data=f"glist_accept_{request_doc_id}"),
+            InlineKeyboardButton("❌ Decline", callback_data=f"glist_decline_{request_doc_id}")
+        ]
+    ]
+    inline_reply_markup = InlineKeyboardMarkup(inline_keyboard)
+    await context.bot.send_message(
+        chat_id=target_user_id,
+        text=f"{requester_name} wants to share grocery lists with you.",
+        reply_markup=inline_reply_markup
+    )
+
 async def users_shared_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Handles the response from KeyboardButtonRequestUsers.
@@ -510,6 +557,11 @@ async def users_shared_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     assert update.message is not None, "Update message should not be None for users_shared"
     assert update.message.users_shared is not None, "users_shared should not be None"
     assert context.user_data is not None, "Context user_data should not be None"
+
+    if context.user_data.get("share_glist_flow"):
+        context.user_data.pop("share_glist_flow", None)
+        await _handle_glist_share_selection(update, context)
+        return
 
     requester_id = str(update.effective_user.id)
     requester_name = update.effective_user.first_name or "User" # Fallback for requester name
@@ -1018,6 +1070,45 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         else:
             await query.edit_message_text("Failed to update request status. Please try again.")
 
+    elif callback_data.startswith("glist_accept_"):
+        await query.answer()
+        request_id = callback_data.split("_")[-1]
+        request_data = await gs.get_grocery_share_request(request_id)
+        if not request_data or request_data.get("status") != "pending":
+            await query.edit_message_text("This share request is no longer valid.")
+            return
+        if str(user_id) != request_data.get("target_user_id"):
+            await query.edit_message_text("Error: This request is not for you.")
+            return
+        if await gs.update_grocery_share_request_status(request_id, "accepted"):
+            await gls.merge_grocery_lists(int(request_data["requester_id"]), int(request_data["target_user_id"]))
+            await context.bot.send_message(
+                chat_id=request_data["requester_id"],
+                text="Your grocery list share request was accepted!"
+            )
+            await query.edit_message_text("You now share the grocery list.")
+        else:
+            await query.edit_message_text("Failed to update request status.")
+
+    elif callback_data.startswith("glist_decline_"):
+        await query.answer()
+        request_id = callback_data.split("_")[-1]
+        request_data = await gs.get_grocery_share_request(request_id)
+        if not request_data or request_data.get("status") != "pending":
+            await query.edit_message_text("This share request is no longer valid.")
+            return
+        if str(user_id) != request_data.get("target_user_id"):
+            await query.edit_message_text("Error: This request is not for you.")
+            return
+        if await gs.update_grocery_share_request_status(request_id, "declined"):
+            await context.bot.send_message(
+                chat_id=request_data["requester_id"],
+                text="Your grocery list share request was declined."
+            )
+            await query.edit_message_text("Share request declined.")
+        else:
+            await query.edit_message_text("Failed to update request status.")
+
     else:
         await query.answer() # Ensure it's called early for unhandled
         logger.warning(f"Callback: Unhandled callback data: {callback_data}")
@@ -1173,3 +1264,28 @@ async def glist_clear(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await update.message.reply_text(
             "Sorry, there was a problem clearing your grocery list."
         )
+
+
+async def share_glist_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Starts the grocery list sharing flow."""
+    assert update.message is not None
+    assert context.user_data is not None
+
+    requester_id = update.effective_user.id
+    keyboard_request_id = int(datetime.now().timestamp())
+    context.user_data["share_glist_flow"] = True
+    context.user_data["select_user_request_id"] = keyboard_request_id
+
+    button_request_users_config = KeyboardButtonRequestUsers(
+        request_id=keyboard_request_id, user_is_bot=False, max_quantity=1
+    )
+    button_select_user = KeyboardButton(
+        text="Select User To Share GList", request_users=button_request_users_config
+    )
+    reply_markup = ReplyKeyboardMarkup(
+        keyboard=[[button_select_user]], resize_keyboard=True, one_time_keyboard=True
+    )
+
+    await update.message.reply_text(
+        "Choose a contact to share your grocery list with:", reply_markup=reply_markup
+    )
