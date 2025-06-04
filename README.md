@@ -17,6 +17,7 @@ This project is a Telegram bot that uses a Large Language Model (LLM) agent to h
     - `/disconnect_calendar`: Remove Google Calendar integration.
     - `/my_status`: Check the current connection status.
     - `/set_timezone`: Configure your local timezone.
+    - `/menu`: Open an interactive menu with grouped command buttons.
     - `/help`: Get assistance and a list of commands.
 
 ## Setup and Installation
@@ -169,6 +170,7 @@ Once the bot is running and you've started a chat with it on Telegram:
     - `/disconnect_calendar`: Revokes the bot's access to your Google Calendar and deletes your stored credentials.
     - `/my_status`: Checks if your Google Calendar is currently connected and if the credentials are valid.
     - `/set_timezone`: Allows you to set or update your local timezone.
+    - `/menu`: Opens an interactive menu that groups commands by context.
     - `/summary [time period]`: Explicitly asks for a summary of events for a given period (e.g., `/summary today`, `/summary next week`).
 
 ## Project Structure

@@ -92,6 +92,7 @@ def main() -> None:
     # Commands
     application.add_handler(CommandHandler("start", handlers.start))
     application.add_handler(CommandHandler("help", handlers.help_command))
+    application.add_handler(CommandHandler("menu", handlers.menu_command))
     application.add_handler(CommandHandler("connect_calendar", handlers.connect_calendar))
     application.add_handler(CommandHandler("my_status", handlers.my_status))
     application.add_handler(CommandHandler("disconnect_calendar", handlers.disconnect_calendar))
@@ -102,6 +103,21 @@ def main() -> None:
     application.add_handler(CommandHandler("glist_add", handlers.glist_add))
     application.add_handler(CommandHandler("glist_show", handlers.glist_show))
     application.add_handler(CommandHandler("glist_clear", handlers.glist_clear))
+
+    # Menu Message Handlers
+    application.add_handler(MessageHandler(filters.Regex("^Calendar$"), handlers.menu_calendar))
+    application.add_handler(MessageHandler(filters.Regex("^Grocery List$"), handlers.menu_grocery))
+    application.add_handler(MessageHandler(filters.Regex("^Help$"), handlers.help_command))
+    application.add_handler(MessageHandler(filters.Regex("^Back$"), handlers.menu_command))
+    application.add_handler(MessageHandler(filters.Regex("^Connect calendar$"), handlers.connect_calendar))
+    application.add_handler(MessageHandler(filters.Regex("^My status$"), handlers.my_status))
+    application.add_handler(MessageHandler(filters.Regex("^Set timezone$"), handlers.set_timezone_start))
+    application.add_handler(MessageHandler(filters.Regex("^Disconnect calendar$"), handlers.disconnect_calendar))
+    application.add_handler(MessageHandler(filters.Regex("^Request access$"), handlers.request_calendar_access_command))
+    application.add_handler(MessageHandler(filters.Regex("^Summary$"), handlers.summary_command))
+    application.add_handler(MessageHandler(filters.Regex("^Add items$"), handlers.glist_add))
+    application.add_handler(MessageHandler(filters.Regex("^Show list$"), handlers.glist_show))
+    application.add_handler(MessageHandler(filters.Regex("^Clear list$"), handlers.glist_clear))
 
     # Message Handler (for natural language processing)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.handle_message))

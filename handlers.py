@@ -383,6 +383,63 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
 
 
+async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Shows the top-level menu with command categories."""
+    assert update.message is not None, "Update message should not be None"
+    keyboard = [["Calendar", "Grocery List"], ["Help"]]
+    try:
+        reply_markup = ReplyKeyboardMarkup(
+            keyboard, resize_keyboard=True, one_time_keyboard=True
+        )
+    except TypeError:
+        reply_markup = ReplyKeyboardMarkup()
+        reply_markup.keyboard = keyboard
+        reply_markup.resize_keyboard = True
+        reply_markup.one_time_keyboard = True
+    await update.message.reply_text(
+        "Choose a category:", reply_markup=reply_markup
+    )
+
+
+async def menu_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Shows calendar related commands."""
+    assert update.message is not None, "Update message should not be None"
+    keyboard = [
+        ["Connect calendar", "My status"],
+        ["Set timezone", "Disconnect calendar"],
+        ["Request access", "Summary"],
+        ["Back"],
+    ]
+    try:
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    except TypeError:
+        reply_markup = ReplyKeyboardMarkup()
+        reply_markup.keyboard = keyboard
+        reply_markup.resize_keyboard = True
+    await update.message.reply_text(
+        "Calendar commands:", reply_markup=reply_markup
+    )
+
+
+async def menu_grocery(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Shows grocery list commands."""
+    assert update.message is not None, "Update message should not be None"
+    keyboard = [
+        ["Add items"],
+        ["Show list", "Clear list"],
+        ["Back"],
+    ]
+    try:
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    except TypeError:
+        reply_markup = ReplyKeyboardMarkup()
+        reply_markup.keyboard = keyboard
+        reply_markup.resize_keyboard = True
+    await update.message.reply_text(
+        "Grocery list commands:", reply_markup=reply_markup
+    )
+
+
 async def request_calendar_access_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Handles the /request_access command.
