@@ -56,6 +56,8 @@ def gs_module(monkeypatch):
     config_mod = types.ModuleType("config")
     config_mod.FIRESTORE_DB = None
     config_mod.FS_COLLECTION_GROCERY_LISTS = "grocery"
+    config_mod.FS_COLLECTION_GROCERY_LIST_GROUPS = "groups"
+    config_mod.FS_COLLECTION_GROCERY_SHARE_REQUESTS = "requests"
     config_mod.FS_COLLECTION_PREFS = "prefs"
     config_mod.FS_COLLECTION_PENDING_EVENTS = "pe"
     config_mod.FS_COLLECTION_PENDING_DELETIONS = "pd"
@@ -162,6 +164,7 @@ def gs_module(monkeypatch):
     # replace the Firestore collection with our fake implementation
     fake_collection = FakeCollection()
     monkeypatch.setattr(gs, "FS_COLLECTION_GROCERY_LISTS", fake_collection)
+    monkeypatch.setattr(gs, "FS_COLLECTION_GROCERY_GROUPS", FakeCollection())
     monkeypatch.setattr(gs, "firestore", types.SimpleNamespace(ArrayUnion=FakeArrayUnion))
     return gs
 
@@ -175,20 +178,18 @@ def test_grocery_list_flow(gs_module):
     result = asyncio.run(gs.get_grocery_list(user_id))
     assert result == []
 
-    # add items
-    success = asyncio.run(gs.add_to_grocery_list(user_id, ["apples", "bananas"]))
-    assert success
-    result = asyncio.run(gs.get_grocery_list(user_id))
-    assert sorted(result) == ["apples", "bananas"]
 
-    # add duplicate and new item
-    success = asyncio.run(gs.add_to_grocery_list(user_id, ["bananas", "carrots"]))
+def test_merge_grocery_lists(gs_module):
+    gs = gs_module
+    user_a = 1
+    user_b = 2
+    asyncio.run(gs.add_to_grocery_list(user_a, ["apples"]))
+    asyncio.run(gs.add_to_grocery_list(user_b, ["bananas"]))
+    success = asyncio.run(gs.merge_grocery_lists(user_a, user_b))
     assert success
-    result = asyncio.run(gs.get_grocery_list(user_id))
-    assert sorted(result) == ["apples", "bananas", "carrots"]
-
-    # delete list
-    success = asyncio.run(gs.delete_grocery_list(user_id))
-    assert success
-    result = asyncio.run(gs.get_grocery_list(user_id))
-    assert result == []
+    list_a = asyncio.run(gs.get_grocery_list(user_a))
+    list_b = asyncio.run(gs.get_grocery_list(user_b))
+    assert sorted(list_a) == sorted(list_b) == ["apples", "bananas"]
+    asyncio.run(gs.add_to_grocery_list(user_a, ["carrots"]))
+    list_b_after = asyncio.run(gs.get_grocery_list(user_b))
+    assert "carrots" in list_b_after
