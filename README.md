@@ -188,7 +188,7 @@ Here's a brief overview of the key files and directories:
 ├── handler/                # Message formatting utilities
 │   ├── __init__.py
 │   └── message_formatter.py
-├── handlers.py             # Defines handlers for Telegram commands, messages, and callbacks
+├── handlers/                # Package containing Telegram handlers
 ├── llm/                    # Logic related to the Large Language Model (LLM) agent
 │   ├── __init__.py
 │   ├── agent.py            # Initializes and configures the LangChain agent
