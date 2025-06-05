@@ -21,6 +21,16 @@ async def _handle_general_chat(update: Update, context: ContextTypes.DEFAULT_TYP
     user_id = update.effective_user.id
     logger.info(f"Handling GENERAL_CHAT for user {user_id} with history")
 
+    if update.message and update.message.photo:
+        try:
+            file = await update.message.photo[-1].get_file()
+            image_bytes = await file.download_as_bytearray()
+            img_text = await llm_service.extract_text_from_image(bytes(image_bytes))
+            if img_text:
+                text = f"{text}\n{img_text}" if text else img_text
+        except Exception as e:
+            logger.error(f"Error processing photo for general chat: {e}")
+
     history = await gs.get_chat_history(user_id, "general")
     logger.debug(f"General Chat: Loaded {len(history)} messages from Firestore for user {user_id}")
 
@@ -40,11 +50,24 @@ async def _handle_general_chat(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not update.message or not update.message.text:
-        logger.warning("handle_message received update without message text.")
+    if not update.message or not (
+        update.message.text or update.message.caption or update.message.photo
+    ):
+        logger.warning("handle_message received update without text, caption, or photo.")
         return
     user_id = update.effective_user.id
-    text = update.message.text
+    text = update.message.text or update.message.caption or ""
+
+    if update.message.photo:
+        try:
+            file = await update.message.photo[-1].get_file()
+            image_bytes = await file.download_as_bytearray()
+            img_text = await llm_service.extract_text_from_image(bytes(image_bytes))
+            if img_text:
+                text = f"{text}\n{img_text}" if text else img_text
+        except Exception as e:
+            logger.error(f"Error processing photo for agent message: {e}")
+
     logger.info(f"Agent Handler: Received message from user {user_id}: '{text[:50]}...'")
 
     if not await gs.is_user_connected(user_id):
