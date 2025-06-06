@@ -100,6 +100,8 @@ def bot_module(monkeypatch):
     telegram_ext_mod.filters = types.SimpleNamespace(
         TEXT=1,
         PHOTO=4,
+        VOICE=5,
+        AUDIO=6,
         COMMAND=2,
         StatusUpdate=types.SimpleNamespace(USERS_SHARED=3),
     )
