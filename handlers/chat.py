@@ -31,6 +31,17 @@ async def _handle_general_chat(update: Update, context: ContextTypes.DEFAULT_TYP
         except Exception as e:
             logger.error(f"Error processing photo for general chat: {e}")
 
+    if update.message and (update.message.voice or update.message.audio):
+        try:
+            voice_or_audio = update.message.voice or update.message.audio
+            file = await voice_or_audio.get_file()
+            audio_bytes = await file.download_as_bytearray()
+            audio_text = await llm_service.transcribe_audio(bytes(audio_bytes))
+            if audio_text:
+                text = f"{text}\n{audio_text}" if text else audio_text
+        except Exception as e:
+            logger.error(f"Error processing audio for general chat: {e}")
+
     history = await gs.get_chat_history(user_id, "general")
     logger.debug(f"General Chat: Loaded {len(history)} messages from Firestore for user {user_id}")
 
@@ -51,9 +62,15 @@ async def _handle_general_chat(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message or not (
-        update.message.text or update.message.caption or update.message.photo
+        update.message.text
+        or update.message.caption
+        or update.message.photo
+        or update.message.voice
+        or update.message.audio
     ):
-        logger.warning("handle_message received update without text, caption, or photo.")
+        logger.warning(
+            "handle_message received update without text, caption, photo, or audio."
+        )
         return
     user_id = update.effective_user.id
     text = update.message.text or update.message.caption or ""
@@ -67,6 +84,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 text = f"{text}\n{img_text}" if text else img_text
         except Exception as e:
             logger.error(f"Error processing photo for agent message: {e}")
+
+    if update.message.voice or update.message.audio:
+        try:
+            voice_or_audio = update.message.voice or update.message.audio
+            file = await voice_or_audio.get_file()
+            audio_bytes = await file.download_as_bytearray()
+            audio_text = await llm_service.transcribe_audio(bytes(audio_bytes))
+            if audio_text:
+                text = f"{text}\n{audio_text}" if text else audio_text
+        except Exception as e:
+            logger.error(f"Error processing audio for agent message: {e}")
 
     logger.info(f"Agent Handler: Received message from user {user_id}: '{text[:50]}...'")
 

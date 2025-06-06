@@ -73,6 +73,46 @@ async def extract_text_from_image(image_bytes: bytes) -> str | None:
         return None
 
 
+async def transcribe_audio(audio_bytes: bytes) -> str | None:
+    """Transcribe audio bytes to text using the Gemini model."""
+    if not llm_available or not gemini_model:
+        logger.error("LLM Service (Audio): LLM not available.")
+        return None
+
+    prompt = "Transcribe the spoken words in this audio into text."
+    try:
+        response = await gemini_model.generate_content_async(
+            [
+                {"inline_data": {"mime_type": "audio/ogg", "data": audio_bytes}},
+                {"text": prompt},
+            ]
+        )
+
+        if getattr(response, "prompt_feedback", None) and getattr(
+            response.prompt_feedback, "block_reason", None
+        ):
+            logger.warning(
+                f"LLM audio transcription blocked: {response.prompt_feedback.block_reason}"
+            )
+            return None
+
+        if hasattr(response, "text"):
+            return response.text
+        if hasattr(response, "parts") and response.parts:
+            return "".join(
+                part.text for part in response.parts if hasattr(part, "text")
+            )
+        logger.warning("LLM audio transcription response missing text content.")
+        return None
+
+    except GoogleAPIError as api_err:
+        logger.error(f"LLM Service (Audio): Google API Error - {api_err}")
+        return None
+    except Exception as e:
+        logger.error(f"LLM Service (Audio): Unexpected error - {e}", exc_info=True)
+        return None
+
+
 async def get_chat_response(history: list[dict]) -> str | None:
     """
     Gets a general chat response from the LLM, considering conversation history.
