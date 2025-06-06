@@ -106,7 +106,9 @@ def main() -> None:
     application.add_handler(CommandHandler("share_glist", handlers.share_glist_command))
 
     # Message Handler (for natural language processing and images)
-    message_filter = (filters.TEXT | filters.PHOTO) & ~filters.COMMAND
+    message_filter = (
+        filters.TEXT | filters.PHOTO | filters.VOICE | filters.AUDIO
+    ) & ~filters.COMMAND
     application.add_handler(MessageHandler(message_filter, handlers.handle_message))
 
     # Callback Query Handler (for inline buttons)
