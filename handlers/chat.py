@@ -12,7 +12,7 @@ from handler.message_formatter import create_final_message
 from llm.agent import initialize_agent
 from llm import llm_service
 from utils import _format_event_time
-from .helpers import _get_user_tz_or_prompt
+from .helpers import _get_user_tz_or_prompt, extract_media_text
 
 logger = logging.getLogger(__name__)
 
@@ -21,26 +21,9 @@ async def _handle_general_chat(update: Update, context: ContextTypes.DEFAULT_TYP
     user_id = update.effective_user.id
     logger.info(f"Handling GENERAL_CHAT for user {user_id} with history")
 
-    if update.message and update.message.photo:
-        try:
-            file = await update.message.photo[-1].get_file()
-            image_bytes = await file.download_as_bytearray()
-            img_text = await llm_service.extract_text_from_image(bytes(image_bytes))
-            if img_text:
-                text = f"{text}\n{img_text}" if text else img_text
-        except Exception as e:
-            logger.error(f"Error processing photo for general chat: {e}")
-
-    if update.message and (update.message.voice or update.message.audio):
-        try:
-            voice_or_audio = update.message.voice or update.message.audio
-            file = await voice_or_audio.get_file()
-            audio_bytes = await file.download_as_bytearray()
-            audio_text = await llm_service.transcribe_audio(bytes(audio_bytes))
-            if audio_text:
-                text = f"{text}\n{audio_text}" if text else audio_text
-        except Exception as e:
-            logger.error(f"Error processing audio for general chat: {e}")
+    media_text = await extract_media_text(update)
+    if media_text:
+        text = f"{text}\n{media_text}" if text else media_text
 
     history = await gs.get_chat_history(user_id, "general")
     logger.debug(f"General Chat: Loaded {len(history)} messages from Firestore for user {user_id}")
@@ -75,26 +58,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user_id = update.effective_user.id
     text = update.message.text or update.message.caption or ""
 
-    if update.message.photo:
-        try:
-            file = await update.message.photo[-1].get_file()
-            image_bytes = await file.download_as_bytearray()
-            img_text = await llm_service.extract_text_from_image(bytes(image_bytes))
-            if img_text:
-                text = f"{text}\n{img_text}" if text else img_text
-        except Exception as e:
-            logger.error(f"Error processing photo for agent message: {e}")
-
-    if update.message.voice or update.message.audio:
-        try:
-            voice_or_audio = update.message.voice or update.message.audio
-            file = await voice_or_audio.get_file()
-            audio_bytes = await file.download_as_bytearray()
-            audio_text = await llm_service.transcribe_audio(bytes(audio_bytes))
-            if audio_text:
-                text = f"{text}\n{audio_text}" if text else audio_text
-        except Exception as e:
-            logger.error(f"Error processing audio for agent message: {e}")
+    media_text = await extract_media_text(update)
+    if media_text:
+        text = f"{text}\n{media_text}" if text else media_text
 
     logger.info(f"Agent Handler: Received message from user {user_id}: '{text[:50]}...'")
 
