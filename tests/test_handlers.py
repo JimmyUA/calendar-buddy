@@ -251,3 +251,50 @@ def test_handle_message_photo_caption(monkeypatch, handlers_module):
     extract_mock.assert_awaited_once()
     assert called["input"] == {"input": "caption\nimage text"}
     message.reply_text.assert_called_once()
+
+
+def test_handle_message_voice(monkeypatch, handlers_module):
+    monkeypatch.setattr(handlers_module.gs, "is_user_connected", AsyncMock(return_value=True), raising=False)
+    monkeypatch.setattr(handlers_module.gs, "get_user_timezone_str", AsyncMock(return_value="UTC"), raising=False)
+    monkeypatch.setattr(handlers_module.gs, "get_chat_history", AsyncMock(return_value=[]), raising=False)
+    monkeypatch.setattr(handlers_module.gs, "add_chat_message", AsyncMock(), raising=False)
+    monkeypatch.setattr(handlers_module, "get_pending_event", AsyncMock(return_value=None), raising=False)
+    monkeypatch.setattr(handlers_module, "delete_pending_event", AsyncMock(), raising=False)
+    monkeypatch.setattr(handlers_module, "get_pending_deletion", AsyncMock(return_value=None), raising=False)
+    monkeypatch.setattr(handlers_module, "delete_pending_deletion", AsyncMock(), raising=False)
+    monkeypatch.setattr(handlers_module.gs, "get_calendar_event_by_id", AsyncMock(return_value=None), raising=False)
+
+    transcribe_mock = AsyncMock(return_value="voice text")
+    monkeypatch.setattr(handlers_module.chat.llm_service, "transcribe_audio", transcribe_mock, raising=False)
+
+    called = {}
+
+    class DummyExecutor:
+        async def ainvoke(self, data):
+            called["input"] = data
+            return {"output": "agent reply"}
+
+    monkeypatch.setattr(handlers_module.chat, "initialize_agent", lambda *a, **k: DummyExecutor())
+
+    dummy_file = types.SimpleNamespace(download_as_bytearray=AsyncMock(return_value=b"audio"))
+    dummy_voice = types.SimpleNamespace(get_file=AsyncMock(return_value=dummy_file))
+    message = MagicMock()
+    message.text = None
+    message.caption = None
+    message.photo = []
+    message.voice = dummy_voice
+    message.audio = None
+    message.chat = types.SimpleNamespace(send_action=AsyncMock())
+    message.reply_text = AsyncMock()
+
+    update = MagicMock()
+    update.message = message
+    update.effective_user.id = 1
+
+    context = MagicMock()
+
+    asyncio.run(handlers_module.handle_message(update, context))
+
+    transcribe_mock.assert_awaited_once()
+    assert called["input"] == {"input": "voice text"}
+    message.reply_text.assert_called_once()

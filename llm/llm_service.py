@@ -2,6 +2,7 @@
 import logging
 import json
 import ast
+import asyncio
 from datetime import datetime, timezone
 
 # Google AI specific imports
@@ -70,6 +71,36 @@ async def extract_text_from_image(image_bytes: bytes) -> str | None:
         return None
     except Exception as e:
         logger.error(f"LLM Service (Image): Unexpected error - {e}", exc_info=True)
+        return None
+
+
+async def transcribe_audio(audio_bytes: bytes) -> str | None:
+    """Transcribe audio bytes to text using SpeechRecognition."""
+    try:
+        import speech_recognition as sr
+        from pydub import AudioSegment
+        import io
+
+        def _convert_and_transcribe() -> str | None:
+            recognizer = sr.Recognizer()
+            audio = AudioSegment.from_file(io.BytesIO(audio_bytes))
+            wav_io = io.BytesIO()
+            audio.export(wav_io, format="wav")
+            wav_io.seek(0)
+            with sr.AudioFile(wav_io) as source:
+                data = recognizer.record(source)
+            try:
+                return recognizer.recognize_google(data)
+            except sr.UnknownValueError:
+                logger.warning("SpeechRecognition could not understand audio")
+                return None
+            except sr.RequestError as e:
+                logger.error(f"SpeechRecognition request error: {e}")
+                return None
+
+        return await asyncio.to_thread(_convert_and_transcribe)
+    except Exception as e:
+        logger.error(f"LLM Service (Audio): Unexpected error - {e}", exc_info=True)
         return None
 
 
