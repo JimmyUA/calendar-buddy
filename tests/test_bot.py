@@ -97,7 +97,12 @@ def bot_module(monkeypatch):
     telegram_ext_mod.CommandHandler = lambda *a, **k: ("CommandHandler", a, k)
     telegram_ext_mod.MessageHandler = lambda *a, **k: ("MessageHandler", a, k)
     telegram_ext_mod.CallbackQueryHandler = lambda *a, **k: ("CallbackQueryHandler", a, k)
-    telegram_ext_mod.filters = types.SimpleNamespace(TEXT=1, COMMAND=2, StatusUpdate=types.SimpleNamespace(USERS_SHARED=3))
+    telegram_ext_mod.filters = types.SimpleNamespace(
+        TEXT=1,
+        PHOTO=4,
+        COMMAND=2,
+        StatusUpdate=types.SimpleNamespace(USERS_SHARED=3),
+    )
     telegram_ext_mod.ConversationHandler = type("ConversationHandler", (), {"END": 0, "__init__": lambda self, *a, **k: None})
     monkeypatch.setitem(sys.modules, "telegram.ext", telegram_ext_mod)
 

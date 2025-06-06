@@ -5,6 +5,7 @@ This project is a Telegram bot that uses a Large Language Model (LLM) agent to h
 ## Features
 
 - **Natural Language Understanding:** Interact with your calendar by typing commands in plain English (e.g., "Schedule a meeting for tomorrow at 2pm," "What's on my agenda for Friday?").
+- **Image Understanding:** Attach a screenshot or photo with your request and the bot will extract text from the image to help process your command. Photos can be sent with or without a caption.
 - **Google Calendar Integration:** Securely connects to your Google Calendar to manage events.
 - **Event Management:**
     - Create new calendar events.
