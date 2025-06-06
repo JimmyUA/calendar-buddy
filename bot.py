@@ -105,14 +105,13 @@ def main() -> None:
     application.add_handler(CommandHandler("glist_clear", handlers.glist_clear))
     application.add_handler(CommandHandler("share_glist", handlers.share_glist_command))
 
-    # Message Handler (for natural language processing)
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.handle_message))
+    # Message Handler (for natural language processing and images)
+    message_filter = (filters.TEXT | filters.PHOTO) & ~filters.COMMAND
+    application.add_handler(MessageHandler(message_filter, handlers.handle_message))
 
     # Callback Query Handler (for inline buttons)
     application.add_handler(CallbackQueryHandler(handlers.button_callback))
 
-    # Message Handler (now invokes the agent)
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.handle_message))
 
     # Handler for UsersShared status update (for KeyboardButtonRequestUsers)
     application.add_handler(MessageHandler(filters.StatusUpdate.USERS_SHARED, handlers.users_shared_handler))
