@@ -106,8 +106,8 @@ def tools(monkeypatch):
     })
     gs_mod.add_pending_deletion = lambda *a, **k: True
     gs_mod.delete_pending_event = lambda *a, **k: None
-    gs_mod.get_calendar_events = AsyncMock(return_value=[{"id": "ev1"}])
-    gs_mod.search_calendar_events = AsyncMock(return_value=[{"id": "ev2"}])
+    gs_mod.get_calendar_events = AsyncMock(return_value=[{"id": "ev123"}])
+    gs_mod.search_calendar_events = AsyncMock(return_value=[{"id": "ev456"}])
     sys.modules["google_services"] = gs_mod
     sys.modules["grocery_services"] = gs_mod
 
@@ -150,6 +150,7 @@ def tools(monkeypatch):
         "get_current_time_tool",
         "create_calendar",
         "delete_calendar",
+        "delete_by_query",
         "read_calendar",
         "search_calendar",
     ]
@@ -220,6 +221,13 @@ def test_delete_calendar_event(tools):
     tool_cls = tools["delete_calendar"].DeleteCalendarEventTool
     tool = tool_cls(user_id=1, user_timezone_str="UTC")
     result = asyncio.run(tool._arun("abcde"))
+    assert result.startswith("Found event")
+
+
+def test_delete_calendar_event_by_query(tools):
+    tool_cls = tools["delete_by_query"].DeleteCalendarEventByQueryTool
+    tool = tool_cls(user_id=1, user_timezone_str="UTC")
+    result = asyncio.run(tool._arun("meeting"))
     assert result.startswith("Found event")
 
 

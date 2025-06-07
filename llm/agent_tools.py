@@ -5,6 +5,7 @@ from langchain.tools import BaseTool  # Use BaseTool for async/context
 
 from llm.tools.create_calendar import CreateCalendarEventTool
 from llm.tools.delete_calendar import DeleteCalendarEventTool
+from llm.tools.delete_by_query import DeleteCalendarEventByQueryTool
 from llm.tools.get_current_time_tool import GetCurrentTimeTool
 from llm.tools.read_calendar import ReadCalendarEventsTool
 from llm.tools.search_calendar import SearchCalendarEventsTool
@@ -22,6 +23,7 @@ def get_tools(user_id: int, user_timezone_str: str) -> list[BaseTool]:
         SearchCalendarEventsTool(user_id=user_id, user_timezone_str=user_timezone_str),
         CreateCalendarEventTool(user_id=user_id, user_timezone_str=user_timezone_str),
         DeleteCalendarEventTool(user_id=user_id, user_timezone_str=user_timezone_str),
+        DeleteCalendarEventByQueryTool(user_id=user_id, user_timezone_str=user_timezone_str),
         GetCurrentTimeTool(user_id=user_id, user_timezone_str=user_timezone_str),
         AddGroceryItemTool(user_id=user_id, user_timezone_str=user_timezone_str),
         ShowGroceryListTool(user_id=user_id, user_timezone_str=user_timezone_str),
