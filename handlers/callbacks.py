@@ -24,13 +24,25 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if not event_details:
             await query.edit_message_text("Event details expired or not found.")
             return
-        await query.edit_message_text(f"Adding '{event_details.get('summary', 'event')}' to your calendar...")
-        success, msg, link = await gs.create_calendar_event(user_id, event_details)
-        final_msg = msg + (f"\nView: <a href='{link}'>Event Link</a>" if link else "")
-        await query.edit_message_text(final_msg, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
-        await delete_pending_event(user_id)
-        if not success and "Authentication failed" in msg and not await gs.is_user_connected(user_id):
-            logger.info(f"Token potentially cleared for {user_id} during failed create confirmation.")
+
+        if isinstance(event_details, list):
+            await query.edit_message_text("Adding multiple events to your calendar...")
+            messages = []
+            for ev in event_details:
+                success, msg, link = await gs.create_calendar_event(user_id, ev)
+                line = msg + (f" <a href='{link}'>View</a>" if link else "")
+                messages.append(line)
+            final_msg = "\n".join(messages)
+            await query.edit_message_text(final_msg, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+            await delete_pending_event(user_id)
+        else:
+            await query.edit_message_text(f"Adding '{event_details.get('summary', 'event')}' to your calendar...")
+            success, msg, link = await gs.create_calendar_event(user_id, event_details)
+            final_msg = msg + (f"\nView: <a href='{link}'>Event Link</a>" if link else "")
+            await query.edit_message_text(final_msg, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+            await delete_pending_event(user_id)
+            if not success and "Authentication failed" in msg and not await gs.is_user_connected(user_id):
+                logger.info(f"Token potentially cleared for {user_id} during failed create confirmation.")
 
     elif callback_data == "cancel_event_create":
         await delete_pending_event(user_id)

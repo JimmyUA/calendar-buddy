@@ -119,6 +119,17 @@ def tools(monkeypatch):
         "description": "desc",
         "location": "loc",
     })
+    llm_service_mod.extract_multiple_create_args_llm = AsyncMock(
+        return_value=[
+            {
+                "summary": "Event",
+                "start": {"dateTime": "2024-01-01T00:00:00+00:00"},
+                "end": {"dateTime": "2024-01-01T01:00:00+00:00"},
+                "description": "desc",
+                "location": "loc",
+            }
+        ]
+    )
     llm_service_mod.extract_read_args_llm = AsyncMock(return_value={
         "start_iso": "2024-01-01T00:00:00+00:00",
         "end_iso": "2024-01-02T00:00:00+00:00",
@@ -214,6 +225,26 @@ def test_create_calendar_event(tools):
     tool = tool_cls(user_id=1, user_timezone_str="UTC")
     result = asyncio.run(tool._arun("meeting tomorrow"))
     assert result.endswith("Should I add this to your calendar?")
+
+
+def test_create_multiple_calendar_events(tools, monkeypatch):
+    tool_cls = tools["create_calendar"].CreateCalendarEventTool
+    tool = tool_cls(user_id=1, user_timezone_str="UTC")
+    llm_service = sys.modules["llm.llm_service"]
+    llm_service.extract_multiple_create_args_llm.return_value = [
+        {
+            "summary": "A",
+            "start": {"dateTime": "2024-01-01T00:00:00+00:00"},
+            "end": {"dateTime": "2024-01-01T01:00:00+00:00"},
+        },
+        {
+            "summary": "B",
+            "start": {"dateTime": "2024-01-02T00:00:00+00:00"},
+            "end": {"dateTime": "2024-01-02T01:00:00+00:00"},
+        },
+    ]
+    result = asyncio.run(tool._arun("two meetings"))
+    assert result.endswith("Should I add these to your calendar?")
 
 
 def test_delete_calendar_event(tools):

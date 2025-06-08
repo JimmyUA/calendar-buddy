@@ -438,26 +438,40 @@ async def find_event_match_llm(user_request: str, candidate_events: list, curren
         return None
 
 # === Safe JSON/Literal Parsing Helper ===
-def _parse_llm_json_output(llm_output: str) -> dict | None:
-    """Attempts to parse LLM output as JSON, falling back to literal_eval."""
-    if not llm_output: return None
-    cleaned_text = llm_output.strip().removeprefix("```json").removesuffix("```").strip()
+def _parse_llm_json_output(llm_output: str) -> dict | list | None:
+    """Attempts to parse LLM output as JSON or a Python literal."""
+    if not llm_output:
+        return None
+
+    cleaned_text = (
+        llm_output.strip().removeprefix("```json").removesuffix("```").strip()
+    )
     logger.debug(f"Attempting to parse: {cleaned_text}")
+
     try:
-        # Try strict JSON first
-        return json.loads(cleaned_text)
+        parsed = json.loads(cleaned_text)
+        if isinstance(parsed, (dict, list)):
+            return parsed
+        logger.error(
+            f"json.loads returned unsupported type {type(parsed)}. Raw: {cleaned_text}"
+        )
+        return None
     except json.JSONDecodeError:
-        logger.warning(f"JSON parsing failed, trying literal_eval for: {cleaned_text}")
+        logger.warning(
+            f"JSON parsing failed, trying literal_eval for: {cleaned_text}"
+        )
         try:
-            # Fallback to literal eval (handles single quotes etc.)
             evaluated = ast.literal_eval(cleaned_text)
-            if isinstance(evaluated, dict):
+            if isinstance(evaluated, (dict, list)):
                 return evaluated
-            else:
-                logger.error(f"ast.literal_eval did not return a dict. Type: {type(evaluated)}")
-                return None
+            logger.error(
+                f"ast.literal_eval returned unsupported type {type(evaluated)}"
+            )
+            return None
         except (ValueError, SyntaxError, TypeError) as eval_err:
-            logger.error(f"JSON and literal parsing failed: {eval_err}. Raw: {cleaned_text}")
+            logger.error(
+                f"JSON and literal parsing failed: {eval_err}. Raw: {cleaned_text}"
+            )
             return None
 
 
@@ -563,3 +577,55 @@ async def extract_create_args_llm(event_description: str, current_time_iso: str,
         logger.info(f"LLM Create Args Result: {event_data}")
         return event_data
     except Exception as e: logger.error(f"LLM Service (Create Args) Error: {e}", exc_info=True); return None
+
+
+async def extract_multiple_create_args_llm(event_description: str, current_time_iso: str, user_timezone_str: str) -> list[dict] | None:
+    """Uses LLM to extract a list of event bodies for creation."""
+    if not llm_available or not gemini_model: logger.error(...); return None
+    prompt = f"""
+    Analyze the user's request to create one or more events. The user's current time is {current_time_iso} and their timezone is {user_timezone_str}.
+    If multiple events are present, split them accordingly. Always respond with a JSON array where each element is a Google Calendar event body
+    as described for 'extract_create_args_llm'. Include description and location if available.
+
+    User Request: "{event_description}"
+
+    JSON Output:
+    """
+    try:
+        logger.debug(f"LLM Create Multi Args Request: '{event_description[:100]}...'")
+        response = await gemini_model.generate_content_async(prompt)
+        if response.prompt_feedback and response.prompt_feedback.block_reason: logger.warning(...); return None
+        if not hasattr(response, 'text'): logger.warning(...); return None
+        events_data = _parse_llm_json_output(response.text)
+        if not events_data:
+            return None
+        if isinstance(events_data, dict):
+            events_list = [events_data]
+        elif isinstance(events_data, list):
+            events_list = events_data
+        else:
+            logger.error(f"LLM Create Multi Args unexpected type: {type(events_data)}")
+            return None
+
+        validated_events: list[dict] = []
+        for ev in events_list:
+            if not isinstance(ev, dict):
+                logger.error(f"LLM Create Multi Args element not dict: {ev}")
+                return None
+            if not ev.get('summary'): logger.error(f"LLM Create Multi Args missing summary: {ev}"); return None
+            start = ev.get('start'); end = ev.get('end')
+            if not start or not isinstance(start, dict) or not start.get('dateTime') or not start.get('timeZone'):
+                logger.error(f"LLM Create Multi Args invalid start: {start}"); return None
+            if not end or not isinstance(end, dict) or not end.get('dateTime') or not end.get('timeZone'):
+                logger.error(f"LLM Create Multi Args invalid end: {end}"); return None
+            try:
+                dateutil_parser.isoparse(start['dateTime']); dateutil_parser.isoparse(end['dateTime'])
+            except Exception as e:
+                logger.error(f"LLM Create Multi Args invalid dates: {e} in {ev}"); return None
+            validated_events.append(ev)
+
+        logger.info(f"LLM Create Multi Args Result: {validated_events}")
+        return validated_events
+    except Exception as e:
+        logger.error(f"LLM Service (Create Multi Args) Error: {e}", exc_info=True)
+        return None

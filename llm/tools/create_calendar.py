@@ -32,42 +32,56 @@ class CreateCalendarEventTool(CalendarBaseTool):
             user_tz = pytz.utc
         now_local_iso = datetime.now(user_tz).isoformat()
 
-        # 1. Call LLM to extract structured event data dictionary
-        event_data = await llm_service.extract_create_args_llm(event_description, now_local_iso, self.user_timezone_str)
-        if not event_data: return f"Error: Could not extract valid event details from '{event_description}'. Please provide more specific information like date and time."
+        # 1. Call LLM to extract one or more event dictionaries
+        events_data = await llm_service.extract_multiple_create_args_llm(
+            event_description, now_local_iso, self.user_timezone_str
+        )
+        if not events_data:
+            return (
+                f"Error: Could not extract valid event details from '{event_description}'. "
+                "Please provide more specific information like date and time."
+            )
+        if isinstance(events_data, dict):
+            events_data = [events_data]
 
         # 2. Format user-friendly confirmation string
         try:
-            summary = event_data.get('summary', 'N/A')
-            start_str = event_data.get('start', {}).get('dateTime')
-            end_str = event_data.get('end', {}).get('dateTime')
-            if not start_str or not end_str: raise ValueError("Missing start/end dateTime from LLM")
+            lines = ["Okay, I can create these events:\n"] if len(events_data) > 1 else ["Okay, I can create this event:\n"]
+            for idx, event_data in enumerate(events_data, 1):
+                summary = event_data.get('summary', 'N/A')
+                start_str = event_data.get('start', {}).get('dateTime')
+                end_str = event_data.get('end', {}).get('dateTime')
+                if not start_str or not end_str:
+                    raise ValueError("Missing start/end dateTime from LLM")
 
-            # Format times in user's local timezone for confirmation message
-            start_dt_local = dateutil_parser.isoparse(start_str).astimezone(user_tz)
-            end_dt_local = dateutil_parser.isoparse(end_str).astimezone(user_tz)
-            start_confirm = start_dt_local.strftime('%a, %b %d, %Y at %I:%M %p %Z')
-            end_confirm = end_dt_local.strftime('%a, %b %d, %Y at %I:%M %p %Z')
+                start_dt_local = dateutil_parser.isoparse(start_str).astimezone(user_tz)
+                end_dt_local = dateutil_parser.isoparse(end_str).astimezone(user_tz)
+                start_confirm = start_dt_local.strftime('%a, %b %d, %Y at %I:%M %p %Z')
+                end_confirm = end_dt_local.strftime('%a, %b %d, %Y at %I:%M %p %Z')
 
-            confirmation_string = (
-                f"Okay, I can create this event:\n"
-                f"Summary: {summary}\n"
-                f"Start: {start_confirm}\n"
-                f"End: {end_confirm}\n"
-                f"Description: {event_data.get('description', '-')}\n"
-                f"Location: {event_data.get('location', '-')}\n\n"
-                f"Should I add this to your calendar?"
-            )
+                prefix = f"{idx}. " if len(events_data) > 1 else ""
+                lines.extend([
+                    f"{prefix}Summary: {summary}",
+                    f"Start: {start_confirm}",
+                    f"End: {end_confirm}",
+                    f"Description: {event_data.get('description', '-')}",
+                    f"Location: {event_data.get('location', '-')}",
+                    "",
+                ])
+
+            final_prompt = "Should I add this to your calendar?" if len(events_data) == 1 else "Should I add these to your calendar?"
+            lines.append(final_prompt)
+            confirmation_string = "\n".join(lines)
         except Exception as e:
             logger.error(f"Error formatting create confirmation: {e}", exc_info=True)
             return "Error: Could not process the extracted event details for confirmation."
 
-        # 3. Store pending action data (the structured data needed by Google API)
-        if await add_pending_event(self.user_id, event_data):
+        # 3. Store pending action data (one or multiple events)
+        if await add_pending_event(self.user_id, events_data):
             # Clear any pending delete for the same user to avoid conflicting states
             # This is a direct replacement for the previous logic, assuming it's still desired.
             # If this cross-state clearing is handled elsewhere (e.g. handlers), this can be removed.
-            logger.info(f"Tool: Pending event for user {self.user_id} stored in Firestore.")
+            logger.info(f"Tool: Pending event(s) for user {self.user_id} stored in Firestore.")
             # 4. Return the confirmation string to the agent
             return confirmation_string
         else:

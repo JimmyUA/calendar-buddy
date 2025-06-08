@@ -202,6 +202,17 @@ def test_pending_event_flow(gs_module):
     assert asyncio.run(gs.get_pending_event(user_id)) is None
 
 
+def test_pending_event_flow_multiple(gs_module):
+    gs = gs_module
+    user_id = 2
+    events = [{"id": "a"}, {"id": "b"}]
+    assert asyncio.run(gs.add_pending_event(user_id, events))
+    fetched = asyncio.run(gs.get_pending_event(user_id))
+    assert fetched == events
+    assert asyncio.run(gs.delete_pending_event(user_id))
+    assert asyncio.run(gs.get_pending_event(user_id)) is None
+
+
 def test_pending_deletion_flow(gs_module):
     gs = gs_module
     user_id = 1
