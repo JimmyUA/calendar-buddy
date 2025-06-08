@@ -22,6 +22,7 @@ from google.cloud import firestore
 from google.cloud.firestore_v1.base_query import FieldFilter
 from google.api_core.exceptions import NotFound
 from pytz.exceptions import UnknownTimeZoneError
+from services import pending as pending_service, preferences as prefs_service
 
 import config # Import our config
 from models import CalendarAccessRequest # Import the Pydantic model
@@ -43,118 +44,29 @@ GROCERY_SHARE_REQUESTS_COLLECTION = db.collection(config.FS_COLLECTION_GROCERY_S
 
 async def add_pending_event(user_id: int, event_data: dict) -> bool:
     """Stores event_data in Firestore for later confirmation."""
-    if not PENDING_EVENTS_COLLECTION:
-        logger.error("Firestore PENDING_EVENTS_COLLECTION unavailable for adding pending event.")
-        return False
-    user_doc_id = str(user_id)
-    doc_ref = PENDING_EVENTS_COLLECTION.document(user_doc_id)
-    try:
-        await asyncio.to_thread(
-            doc_ref.set,
-            {
-                'event_data': event_data,
-                'created_at': firestore.SERVER_TIMESTAMP
-            }
-        )
-        logger.info(f"Stored pending event for user {user_id} in '{config.FS_COLLECTION_PENDING_EVENTS}'")
-        return True
-    except Exception as e:
-        logger.error(f"Failed to store pending event for user {user_id}: {e}", exc_info=True)
-        return False
+    return await pending_service.add_pending_event(user_id, event_data)
 
 async def get_pending_event(user_id: int) -> dict | None:
     """Retrieves pending event data for a user from Firestore."""
-    if not PENDING_EVENTS_COLLECTION:
-        logger.error("Firestore PENDING_EVENTS_COLLECTION unavailable for getting pending event.")
-        return None
-    user_doc_id = str(user_id)
-    doc_ref = PENDING_EVENTS_COLLECTION.document(user_doc_id)
-    try:
-        snapshot = await asyncio.to_thread(doc_ref.get)
-        if snapshot.exists:
-            data = snapshot.to_dict() # type: ignore
-            logger.debug(f"Retrieved pending event for user {user_id}.")
-            return data.get('event_data') # Return only the event_data part
-        else:
-            logger.debug(f"No pending event found for user {user_id}.")
-            return None
-    except Exception as e:
-        logger.error(f"Error fetching pending event for user {user_id}: {e}", exc_info=True)
-        return None
+    return await pending_service.get_pending_event(user_id)
 
 async def delete_pending_event(user_id: int) -> bool:
     """Deletes a pending event document for a user from Firestore."""
-    if not PENDING_EVENTS_COLLECTION:
-        logger.error("Firestore PENDING_EVENTS_COLLECTION unavailable for deleting pending event.")
-        return False
-    user_doc_id = str(user_id)
-    doc_ref = PENDING_EVENTS_COLLECTION.document(user_doc_id)
-    try:
-        await asyncio.to_thread(doc_ref.delete)
-        logger.info(f"Deleted pending event for user {user_id} (if it existed).")
-        return True # Success even if doc didn't exist, as per Firestore behavior
-    except Exception as e:
-        logger.error(f"Failed to delete pending event for user {user_id}: {e}", exc_info=True)
-        return False
+    return await pending_service.delete_pending_event(user_id)
 
 # === Pending Deletion Management (Firestore) ===
 
 async def add_pending_deletion(user_id: int, deletion_data: dict) -> bool:
-    """Stores deletion_data (e.g., event_id, summary) in Firestore for later confirmation."""
-    if not PENDING_DELETIONS_COLLECTION:
-        logger.error("Firestore PENDING_DELETIONS_COLLECTION unavailable for adding pending deletion.")
-        return False
-    user_doc_id = str(user_id)
-    doc_ref = PENDING_DELETIONS_COLLECTION.document(user_doc_id)
-    try:
-        # Store the provided deletion_data directly, ensure it includes event_id and summary
-        await asyncio.to_thread(
-            doc_ref.set,
-            {
-                'deletion_data': deletion_data, # e.g., {'event_id': 'xyz', 'summary': 'Event to delete'}
-                'created_at': firestore.SERVER_TIMESTAMP
-            }
-        )
-        logger.info(f"Stored pending deletion for user {user_id} in '{config.FS_COLLECTION_PENDING_DELETIONS}'")
-        return True
-    except Exception as e:
-        logger.error(f"Failed to store pending deletion for user {user_id}: {e}", exc_info=True)
-        return False
+    """Stores deletion_data in Firestore for later confirmation."""
+    return await pending_service.add_pending_deletion(user_id, deletion_data)
 
 async def get_pending_deletion(user_id: int) -> dict | None:
     """Retrieves pending deletion data for a user from Firestore."""
-    if not PENDING_DELETIONS_COLLECTION:
-        logger.error("Firestore PENDING_DELETIONS_COLLECTION unavailable for getting pending deletion.")
-        return None
-    user_doc_id = str(user_id)
-    doc_ref = PENDING_DELETIONS_COLLECTION.document(user_doc_id)
-    try:
-        snapshot = await asyncio.to_thread(doc_ref.get)
-        if snapshot.exists:
-            data = snapshot.to_dict() # type: ignore
-            logger.debug(f"Retrieved pending deletion for user {user_id}.")
-            return data.get('deletion_data') # Return only the deletion_data part
-        else:
-            logger.debug(f"No pending deletion found for user {user_id}.")
-            return None
-    except Exception as e:
-        logger.error(f"Error fetching pending deletion for user {user_id}: {e}", exc_info=True)
-        return None
+    return await pending_service.get_pending_deletion(user_id)
 
 async def delete_pending_deletion(user_id: int) -> bool:
     """Deletes a pending deletion document for a user from Firestore."""
-    if not PENDING_DELETIONS_COLLECTION:
-        logger.error("Firestore PENDING_DELETIONS_COLLECTION unavailable for deleting pending deletion.")
-        return False
-    user_doc_id = str(user_id)
-    doc_ref = PENDING_DELETIONS_COLLECTION.document(user_doc_id)
-    try:
-        await asyncio.to_thread(doc_ref.delete)
-        logger.info(f"Deleted pending deletion for user {user_id} (if it existed).")
-        return True # Success even if doc didn't exist
-    except Exception as e:
-        logger.error(f"Failed to delete pending deletion for user {user_id}: {e}", exc_info=True)
-        return False
+    return await pending_service.delete_pending_deletion(user_id)
 
 # === Google Authentication & Firestore Persistence ===
 # --- NEW: Get Single Event by ID ---
@@ -180,67 +92,12 @@ async def get_calendar_event_by_id(user_id: int, event_id: str) -> dict | None:
 
 # --- Timezone Functions (Using NEW Collection) ---
 async def set_user_timezone(user_id: int, timezone_str: str) -> bool:
-    """
-    Stores the user's validated IANA timezone string in Firestore.
-    """
-    if not USER_PREFS_COLLECTION:
-        logger.error("Firestore USER_PREFS_COLLECTION unavailable for setting timezone/username.")
-        return False
-    user_doc_id = str(user_id)
-    doc_ref = USER_PREFS_COLLECTION.document(user_doc_id)
-    try:
-        # Validate timezone before storing (pytz.timezone is CPU-bound, not I/O)
-        pytz.timezone(timezone_str)
-
-        data_to_set = {
-            'timezone': timezone_str,
-            'updated_at': firestore.SERVER_TIMESTAMP
-        }
-        logger.info(f"Preparing to store timezone '{timezone_str}' for user {user_id}")
-
-        await asyncio.to_thread(doc_ref.set, data_to_set, merge=True)
-
-        logger.info(f"Stored timezone '{timezone_str}' for user {user_id} in '{config.FS_COLLECTION_PREFS}'")
-        return True
-    except UnknownTimeZoneError:
-        logger.warning(f"Attempted to store invalid timezone '{timezone_str}' for user {user_id}")
-        return False
-    except Exception as e:
-        logger.error(f"Failed to store timezone/username for user {user_id}: {e}", exc_info=True)
-        return False
+    """Stores the user's validated IANA timezone string in Firestore."""
+    return await prefs_service.set_user_timezone(user_id, timezone_str)
 
 async def get_user_timezone_str(user_id: int) -> str | None:
     """Retrieves the user's timezone string from Firestore."""
-    # ---> Use USER_PREFS_COLLECTION <---
-    if not USER_PREFS_COLLECTION:
-        logger.error("Firestore USER_PREFS_COLLECTION unavailable for getting timezone.")
-        return None
-    user_doc_id = str(user_id)
-    doc_ref = USER_PREFS_COLLECTION.document(user_doc_id)
-    try:
-        snapshot = await asyncio.to_thread(doc_ref.get) # Fetch the preferences document
-
-        if snapshot.exists:
-            prefs_data = snapshot.to_dict() # type: ignore
-            if 'timezone' in prefs_data: # Check if the field exists
-                tz_str = prefs_data.get('timezone')
-                # Optional re-validation
-                try:
-                    pytz.timezone(tz_str)
-                    logger.debug(f"Found timezone '{tz_str}' for user {user_id} in '{config.FS_COLLECTION_PREFS}'")
-                    return tz_str
-                except UnknownTimeZoneError:
-                    logger.warning(f"Found invalid timezone '{tz_str}' in DB prefs for user {user_id}. Treating as unset.")
-                    return None
-            else:
-                logger.debug(f"Timezone field not found in prefs for user {user_id}")
-                return None
-        else:
-            logger.debug(f"User preferences document not found for user {user_id}, timezone not set.")
-            return None
-    except Exception as e:
-        logger.error(f"Error fetching timezone for user {user_id}: {e}", exc_info=True)
-        return None
+    return await prefs_service.get_user_timezone_str(user_id)
 
 async def get_calendar_events(user_id: int, time_min_iso: str, time_max_iso: str, max_results: int = 25) -> list | None:
     """

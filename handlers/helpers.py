@@ -5,6 +5,7 @@ from telegram.ext import ContextTypes
 import pytz
 from pytz.exceptions import UnknownTimeZoneError
 import google_services as gs
+from llm import llm_service
 
 logger = logging.getLogger(__name__)
 
@@ -47,3 +48,34 @@ async def _get_user_tz_or_prompt(update: Update, context: ContextTypes.DEFAULT_T
     await update.message.reply_text(
         "Please set your timezone first using the /set_timezone command so I can understand times correctly.")
     return None
+
+
+async def extract_media_text(update: Update) -> str:
+    """Extract text from photo, voice or audio in the update using LLM service."""
+    if not update.message:
+        return ""
+
+    text_parts: list[str] = []
+
+    if update.message.photo:
+        try:
+            file = await update.message.photo[-1].get_file()
+            image_bytes = await file.download_as_bytearray()
+            img_text = await llm_service.extract_text_from_image(bytes(image_bytes))
+            if img_text:
+                text_parts.append(img_text)
+        except Exception as e:  # pragma: no cover - logging only
+            logger.error(f"Error processing photo: {e}")
+
+    if update.message.voice or update.message.audio:
+        try:
+            voice_or_audio = update.message.voice or update.message.audio
+            file = await voice_or_audio.get_file()
+            audio_bytes = await file.download_as_bytearray()
+            audio_text = await llm_service.transcribe_audio(bytes(audio_bytes))
+            if audio_text:
+                text_parts.append(audio_text)
+        except Exception as e:  # pragma: no cover - logging only
+            logger.error(f"Error processing audio: {e}")
+
+    return "\n".join(text_parts)
