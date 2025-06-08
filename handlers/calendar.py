@@ -8,6 +8,7 @@ from telegram.ext import ContextTypes
 import pytz
 
 import google_services as gs
+import calendar_services as cs
 from google_services import (
     add_pending_event,
     get_pending_event,
@@ -63,7 +64,7 @@ async def _handle_calendar_summary(update: Update, context: ContextTypes.DEFAULT
     if end_date <= start_date:
         end_date = start_date.replace(hour=23, minute=59, second=59, microsecond=999999)
 
-    events = await gs.get_calendar_events(user_id, time_min=start_date, time_max=end_date)
+    events = await cs.get_calendar_events(user_id, time_min=start_date, time_max=end_date)
 
     if events is None:
         await update.message.reply_text("Sorry, couldn't fetch events.")
@@ -178,7 +179,7 @@ async def _handle_calendar_delete(update: Update, context: ContextTypes.DEFAULT_
         search_end = now + timedelta(days=3)
     logger.info(f"Delete search window: {search_start.isoformat()} to {search_end.isoformat()}")
 
-    potential_events = await gs.get_calendar_events(user_id, time_min=search_start, time_max=search_end, max_results=25)
+    potential_events = await cs.get_calendar_events(user_id, time_min=search_start, time_max=search_end, max_results=25)
 
     if potential_events is None:
         await update.message.reply_text("Sorry, couldn't search your calendar now.")

@@ -5,6 +5,7 @@ import pytz  # For timezone handling
 from pytz.exceptions import UnknownTimeZoneError
 
 import google_services as gs
+import calendar_services as cs
 from llm import llm_service
 from llm.tools.calendar_base import CalendarBaseTool
 from llm.tools.formatting import format_event_list_for_agent
@@ -42,8 +43,12 @@ class SearchCalendarEventsTool(CalendarBaseTool):
         end_iso = parsed_args['end_iso']
 
         # 3. Search events using structured args
-        events = await gs.search_calendar_events(self.user_id, query=query, time_min_iso=start_iso,
-                                                 time_max_iso=end_iso)
+        events = await cs.search_calendar_events(
+            self.user_id,
+            query=query,
+            time_min_iso=start_iso,
+            time_max_iso=end_iso,
+        )
 
         # 4. Format response (remains similar)
         if events is None:

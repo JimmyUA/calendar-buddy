@@ -7,7 +7,13 @@ from telegram.ext import ContextTypes
 import pytz
 
 import google_services as gs
-from google_services import get_pending_event, delete_pending_event, get_pending_deletion, delete_pending_deletion
+import calendar_services as cs
+from google_services import (
+    get_pending_event,
+    delete_pending_event,
+    get_pending_deletion,
+    delete_pending_deletion,
+)
 from handler.message_formatter import create_final_message
 from llm.agent import initialize_agent
 from llm import llm_service
@@ -118,7 +124,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if pending_deletion_data:
             logger.info(f"Pending event delete found for user {user_id} from Firestore. Formatting confirmation.")
             event_id_to_delete = pending_deletion_data.get('event_id')
-            event_details_for_confirm = await gs.get_calendar_event_by_id(user_id, event_id_to_delete)
+            event_details_for_confirm = await cs.get_calendar_event_by_id(user_id, event_id_to_delete)
 
             if event_details_for_confirm:
                 try:
