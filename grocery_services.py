@@ -2,6 +2,7 @@ import asyncio
 import logging
 import uuid
 from google.cloud import firestore
+from google.api_core.exceptions import NotFound
 
 import config
 
@@ -15,7 +16,9 @@ FS_COLLECTION_GROCERY_LISTS = (
 FS_COLLECTION_GROCERY_GROUPS = (
     _db.collection(config.FS_COLLECTION_GROCERY_LIST_GROUPS) if _db else None
 )
-
+GROCERY_SHARE_REQUESTS_COLLECTION = (
+    _db.collection(config.FS_COLLECTION_GROCERY_SHARE_REQUESTS) if _db else None
+)
 
 async def get_grocery_list(user_id: int) -> list[str] | None:
     """Retrieves the user's grocery list, following group link if present."""
@@ -155,3 +158,77 @@ async def merge_grocery_lists(user_a: int, user_b: int) -> bool:
         logger.error(f"GS: Error merging grocery lists for {user_a} and {user_b}: {e}", exc_info=True)
         return False
 
+async def add_grocery_share_request(
+    requester_id: str,
+    requester_name: str,
+    target_user_id: str,
+) -> str | None:
+    """Creates a new grocery list share request document."""
+    if not GROCERY_SHARE_REQUESTS_COLLECTION:
+        logger.error("Firestore GROCERY_SHARE_REQUESTS_COLLECTION unavailable.")
+        return None
+
+    try:
+        request_data = {
+            "requester_id": requester_id,
+            "requester_name": requester_name,
+            "target_user_id": target_user_id,
+            "status": "pending",
+            "request_timestamp": firestore.SERVER_TIMESTAMP,
+        }
+        doc_ref_new = GROCERY_SHARE_REQUESTS_COLLECTION.document()  # type: ignore
+        await asyncio.to_thread(doc_ref_new.set, request_data)
+        logger.info(
+            f"Grocery share request from {requester_id} to {target_user_id} stored with ID: {doc_ref_new.id}"
+        )
+        return doc_ref_new.id
+    except Exception as e:
+        logger.error(
+            f"Failed to add grocery share request from {requester_id} to {target_user_id}: {e}",
+            exc_info=True,
+        )
+        return None
+
+
+async def get_grocery_share_request(request_id: str) -> dict | None:
+    """Retrieves a grocery list share request document."""
+    if not GROCERY_SHARE_REQUESTS_COLLECTION:
+        logger.error(
+            "Firestore GROCERY_SHARE_REQUESTS_COLLECTION unavailable for get_grocery_share_request."
+        )
+        return None
+    try:
+        doc_ref = GROCERY_SHARE_REQUESTS_COLLECTION.document(request_id)
+        snapshot = await asyncio.to_thread(doc_ref.get)
+        if snapshot.exists:
+            request_data = snapshot.to_dict()  # type: ignore
+            logger.info(f"Retrieved grocery share request with ID: {request_id}")
+            return request_data
+        else:
+            logger.warning(f"Grocery share request with ID: {request_id} not found.")
+            return None
+    except Exception as e:
+        logger.error(f"Error fetching grocery share request {request_id}: {e}", exc_info=True)
+        return None
+async def update_grocery_share_request_status(request_id: str, status: str) -> bool:
+    """Updates the status of a grocery list share request."""
+    if not GROCERY_SHARE_REQUESTS_COLLECTION:
+        logger.error(
+            "Firestore GROCERY_SHARE_REQUESTS_COLLECTION unavailable for update_grocery_share_request_status."
+        )
+        return False
+    try:
+        doc_ref = GROCERY_SHARE_REQUESTS_COLLECTION.document(request_id)
+        update_data = {"status": status, "response_timestamp": firestore.SERVER_TIMESTAMP}
+        await asyncio.to_thread(doc_ref.update, update_data)
+        logger.info(f"Updated grocery share request {request_id} to status '{status}'.")
+        return True
+    except NotFound:
+        logger.warning(f"Grocery share request {request_id} not found during status update.")
+        return False
+    except Exception as e:
+        logger.error(
+            f"Failed to update status for grocery share request {request_id}: {e}",
+            exc_info=True,
+        )
+        return False
