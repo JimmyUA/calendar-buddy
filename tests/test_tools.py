@@ -106,8 +106,8 @@ def tools(monkeypatch):
     })
     gs_mod.add_pending_deletion = lambda *a, **k: True
     gs_mod.delete_pending_event = lambda *a, **k: None
-    gs_mod.get_calendar_events = AsyncMock(return_value=[{"id": "ev1"}])
-    gs_mod.search_calendar_events = AsyncMock(return_value=[{"id": "ev2"}])
+    gs_mod.get_calendar_events = AsyncMock(return_value=[{"id": "ev123"}])
+    gs_mod.search_calendar_events = AsyncMock(return_value=[{"id": "ev456"}])
     sys.modules["google_services"] = gs_mod
     sys.modules["grocery_services"] = gs_mod
 
@@ -139,6 +139,15 @@ def tools(monkeypatch):
     utils_mod._format_event_time = lambda *a, **k: "formatted time"
     sys.modules["utils"] = utils_mod
 
+    msg_mod = types.ModuleType("handler.message_formatter")
+    async def del_msg(*a, **k):
+        return "delete msg"
+    async def create_msg(*a, **k):
+        return "create msg"
+    msg_mod.create_delete_confirmation_message = del_msg
+    msg_mod.create_final_message = create_msg
+    sys.modules["handler.message_formatter"] = msg_mod
+
     fmt_mod = importlib.import_module("llm.tools.formatting")
     monkeypatch.setattr(fmt_mod, "format_event_list_for_agent", lambda *a, **k: "formatted events")
 
@@ -150,6 +159,7 @@ def tools(monkeypatch):
         "get_current_time_tool",
         "create_calendar",
         "delete_calendar",
+        "delete_by_query",
         "read_calendar",
         "search_calendar",
     ]
@@ -220,7 +230,14 @@ def test_delete_calendar_event(tools):
     tool_cls = tools["delete_calendar"].DeleteCalendarEventTool
     tool = tool_cls(user_id=1, user_timezone_str="UTC")
     result = asyncio.run(tool._arun("abcde"))
-    assert result.startswith("Found event")
+    assert result == "delete msg"
+
+
+def test_delete_calendar_event_by_query(tools):
+    tool_cls = tools["delete_by_query"].DeleteCalendarEventByQueryTool
+    tool = tool_cls(user_id=1, user_timezone_str="UTC")
+    result = asyncio.run(tool._arun("meeting"))
+    assert result == "delete msg"
 
 
 def test_read_calendar_events(tools):

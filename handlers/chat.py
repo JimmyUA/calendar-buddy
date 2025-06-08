@@ -8,7 +8,7 @@ import pytz
 
 import google_services as gs
 from google_services import get_pending_event, delete_pending_event, get_pending_deletion, delete_pending_deletion
-from handler.message_formatter import create_final_message
+from handler.message_formatter import create_final_message, create_delete_confirmation_message
 from llm.agent import initialize_agent
 from llm import llm_service
 from utils import _format_event_time
@@ -156,15 +156,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
             if event_details_for_confirm:
                 try:
-                    user_tz = pytz.timezone(user_timezone_str if user_timezone_str else 'UTC')
-                    summary = event_details_for_confirm.get('summary', 'this event')
-                    time_confirm = _format_event_time(event_details_for_confirm, user_tz)
-                    final_message_to_send = (
-                        f"Found event: '<b>{summary}</b>' ({time_confirm}).\n\n"
-                        f"Should I delete this event?"
-                    )
+                    final_message_to_send = await create_delete_confirmation_message(event_details_for_confirm)
                 except Exception as e:
-                    logger.error(f"Error formatting delete confirmation in handler from Firestore data: {e}", exc_info=True)
+                    logger.error(
+                        f"Error formatting delete confirmation in handler from Firestore data: {e}",
+                        exc_info=True,
+                    )
                     summary = pending_deletion_data.get('summary', 'the selected event')
                     final_message_to_send = f"Are you sure you want to delete '{summary}'?"
             else:

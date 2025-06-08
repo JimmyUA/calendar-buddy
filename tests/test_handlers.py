@@ -112,7 +112,10 @@ def handlers_module(monkeypatch):
     sys.modules["utils"] = utils_mod
     # stub handler.message_formatter
     msg_mod = types.ModuleType("handler.message_formatter")
-    msg_mod.create_final_message = lambda data: ""
+    async def dummy_create(data=None):
+        return ""
+    msg_mod.create_final_message = dummy_create
+    msg_mod.create_delete_confirmation_message = dummy_create
     sys.modules["handler.message_formatter"] = msg_mod
     handlers = importlib.import_module("handlers")
     return handlers

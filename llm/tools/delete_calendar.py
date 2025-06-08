@@ -5,6 +5,7 @@ import pytz  # For timezone handling
 from google_services import add_pending_deletion, delete_pending_event # For Firestore pending actions
 import google_services as gs
 from llm.tools.calendar_base import CalendarBaseTool
+from handler.message_formatter import create_delete_confirmation_message
 from utils import _format_event_time
 
 logger = logging.getLogger(__name__)
@@ -29,13 +30,16 @@ class DeleteCalendarEventTool(CalendarBaseTool):
 
         event_summary = event_details.get('summary', 'No Title')
 
-        # 2. Format confirmation string
+        # 2. Format confirmation string with detailed info
         try:
-            user_tz = pytz.timezone(self.user_timezone_str)
-            time_confirm = _format_event_time(event_details, user_tz)
+            confirmation_string = await create_delete_confirmation_message(event_details)
         except Exception:
-            time_confirm = "[Could not format time]"
-        confirmation_string = f"Found event: '{event_summary}' ({time_confirm}).\n\nShould I delete this event?"
+            try:
+                user_tz = pytz.timezone(self.user_timezone_str)
+                time_confirm = _format_event_time(event_details, user_tz)
+            except Exception:
+                time_confirm = "[Could not format time]"
+            confirmation_string = f"Found event: '{event_summary}' ({time_confirm}).\n\nShould I delete this event?"
 
         # 3. Store pending action data
         # Clear any pending event creation first to avoid conflicting states

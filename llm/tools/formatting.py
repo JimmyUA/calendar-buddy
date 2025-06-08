@@ -138,11 +138,14 @@ def format_event_list_for_agent(events: list, time_period_str: str, user_timezon
         # Event Item
         output_lines.append(f"  ✨ <b>{summary}</b>")  # Intend with spaces
         if parsed_time_str:
-            time_line = f"⏰ <i>{html.escape(parsed_time_str)}"  # Use <pre> for indent
+            time_line = f"⏰ <i>{html.escape(parsed_time_str)}"
             if parsed_duration_str and not time_info.get('is_all_day'):
                 time_line += f" {html.escape(parsed_duration_str)}"
             time_line += "</i>"
             output_lines.append(time_line)
+
+        if include_ids and event_id:
+            output_lines.append(f"🆔 <code>{html.escape(event_id)}</code>")
 
         if location:
             encoded_location = urllib.parse.quote_plus(location)
