@@ -6,7 +6,13 @@ from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
 import google_services as gs
-from google_services import get_pending_event, delete_pending_event, get_pending_deletion, delete_pending_deletion
+import calendar_services as cs
+from google_services import (
+    get_pending_event,
+    delete_pending_event,
+    get_pending_deletion,
+    delete_pending_deletion,
+)
 from utils import _format_event_time, escape_markdown_v2
 from .helpers import _format_iso_datetime_for_display
 
@@ -25,7 +31,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.edit_message_text("Event details expired or not found.")
             return
         await query.edit_message_text(f"Adding '{event_details.get('summary', 'event')}' to your calendar...")
-        success, msg, link = await gs.create_calendar_event(user_id, event_details)
+        success, msg, link = await cs.create_calendar_event(user_id, event_details)
         final_msg = msg + (f"\nView: <a href='{link}'>Event Link</a>" if link else "")
         await query.edit_message_text(final_msg, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
         await delete_pending_event(user_id)
@@ -49,7 +55,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await delete_pending_deletion(user_id)
             return
         await query.edit_message_text(f"Deleting '{summary}'...")
-        success, msg = await gs.delete_calendar_event(user_id, event_id)
+        success, msg = await cs.delete_calendar_event(user_id, event_id)
         await query.edit_message_text(msg, parse_mode=ParseMode.HTML)
         await delete_pending_deletion(user_id)
         if not success and "Authentication failed" in msg and not await gs.is_user_connected(user_id):
@@ -87,7 +93,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             start_time_iso = request_data['start_time_iso']
             end_time_iso = request_data['end_time_iso']
 
-            events = await gs.get_calendar_events(int(target_user_id), start_time_iso, end_time_iso)
+            events = await cs.get_calendar_events(int(target_user_id), start_time_iso, end_time_iso)
 
             escaped_requester_name = escape_markdown_v2(str(request_data.get('requester_name', 'them')))
             events_summary_message = f"🗓️ Calendar events for {escaped_requester_name} " \

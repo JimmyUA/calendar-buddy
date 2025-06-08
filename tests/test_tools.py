@@ -110,6 +110,7 @@ def tools(monkeypatch):
     gs_mod.search_calendar_events = AsyncMock(return_value=[{"id": "ev2"}])
     sys.modules["google_services"] = gs_mod
     sys.modules["grocery_services"] = gs_mod
+    sys.modules["calendar_services"] = gs_mod
 
     llm_service_mod = types.ModuleType("llm.llm_service")
     llm_service_mod.extract_create_args_llm = AsyncMock(return_value={

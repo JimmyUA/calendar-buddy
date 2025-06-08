@@ -54,6 +54,13 @@ def handlers_module(monkeypatch):
         return None
     gs_mod.get_user_timezone_str = async_noop
     sys.modules["google_services"] = gs_mod
+    cal_mod = types.ModuleType("calendar_services")
+    cal_mod.get_calendar_event_by_id = async_noop
+    cal_mod.create_calendar_event = async_noop
+    cal_mod.delete_calendar_event = async_noop
+    cal_mod.get_calendar_events = async_noop
+    cal_mod.search_calendar_events = async_noop
+    sys.modules["calendar_services"] = cal_mod
     # also provide names imported separately
     sys.modules["google_services"].add_pending_event = async_noop
     sys.modules["google_services"].get_pending_event = async_noop
@@ -216,7 +223,12 @@ def test_handle_message_photo_caption(monkeypatch, handlers_module):
     monkeypatch.setattr(handlers_module, "delete_pending_event", AsyncMock(), raising=False)
     monkeypatch.setattr(handlers_module, "get_pending_deletion", AsyncMock(return_value=None), raising=False)
     monkeypatch.setattr(handlers_module, "delete_pending_deletion", AsyncMock(), raising=False)
-    monkeypatch.setattr(handlers_module.gs, "get_calendar_event_by_id", AsyncMock(return_value=None), raising=False)
+    monkeypatch.setattr(
+        handlers_module.chat.cs,
+        "get_calendar_event_by_id",
+        AsyncMock(return_value=None),
+        raising=False,
+    )
 
     # patch LLM service and agent
     extract_mock = AsyncMock(return_value="image text")
@@ -262,7 +274,12 @@ def test_handle_message_voice(monkeypatch, handlers_module):
     monkeypatch.setattr(handlers_module, "delete_pending_event", AsyncMock(), raising=False)
     monkeypatch.setattr(handlers_module, "get_pending_deletion", AsyncMock(return_value=None), raising=False)
     monkeypatch.setattr(handlers_module, "delete_pending_deletion", AsyncMock(), raising=False)
-    monkeypatch.setattr(handlers_module.gs, "get_calendar_event_by_id", AsyncMock(return_value=None), raising=False)
+    monkeypatch.setattr(
+        handlers_module.chat.cs,
+        "get_calendar_event_by_id",
+        AsyncMock(return_value=None),
+        raising=False,
+    )
 
     transcribe_mock = AsyncMock(return_value="voice text")
     monkeypatch.setattr(handlers_module.chat.llm_service, "transcribe_audio", transcribe_mock, raising=False)
