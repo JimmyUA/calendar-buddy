@@ -2,7 +2,8 @@ import logging
 
 import pytz  # For timezone handling
 
-from google_services import add_pending_deletion, delete_pending_event # For Firestore pending actions
+from google_services import add_pending_deletion, delete_pending_event
+import calendar_services as cs
 import google_services as gs
 from llm.tools.calendar_base import CalendarBaseTool
 from utils import _format_event_time
@@ -23,7 +24,7 @@ class DeleteCalendarEventTool(CalendarBaseTool):
             return "Error: A valid event ID is required. Use search_calendar_events first if you don't have the ID."
 
         # 1. Fetch event details to get summary for confirmation
-        event_details = await gs.get_calendar_event_by_id(self.user_id, event_id)
+        event_details = await cs.get_calendar_event_by_id(self.user_id, event_id)
         if not event_details:
             return f"Error: Could not find event with ID '{event_id}'. It might be incorrect or already deleted."
 
