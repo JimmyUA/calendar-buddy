@@ -2,18 +2,14 @@
 import logging
 # Langchain Imports
 from langchain_google_genai import ChatGoogleGenerativeAI
-# --> Import ReAct specific formatting helper <--
-from langchain_classic.agents.format_scratchpad.log import format_log_to_str # Try string format
-# from langchain.agents.format_scratchpad.openai_functions import format_to_openai_function_messages # Alternative for function calling
-from langchain_classic.agents.output_parsers.react_single_input import ReActSingleInputOutputParser # Standard parser for ReAct
-
-from langchain.agents.agent_executor import AgentExecutor
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, PromptTemplate # Import PromptTemplate for string formatting
+from langchain_classic.agents.format_scratchpad.log import format_log_to_str
+from langchain_classic.agents.output_parsers.react_single_input import ReActSingleInputOutputParser
+from langchain_classic.agents.agent import AgentExecutor
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, PromptTemplate
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain.memory import ConversationBufferWindowMemory
 from langchain_community.chat_message_histories import ChatMessageHistory
-# --> Import tool rendering helper <--
-from langchain.tools.render import render_text_description
+from langchain_core.tools import render_text_description
 
 import config
 from llm.agent_tools import get_tools
