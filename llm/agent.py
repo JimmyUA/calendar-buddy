@@ -7,8 +7,8 @@ from langchain_classic.agents.output_parsers.react_single_input import ReActSing
 from langchain_classic.agents.agent import AgentExecutor
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, PromptTemplate
 from langchain_core.messages import AIMessage, HumanMessage
-from langchain.memory import ConversationBufferWindowMemory
-from langchain_community.chat_message_histories import ChatMessageHistory
+from langchain_classic.memory.buffer_window import ConversationBufferWindowMemory
+from langchain_core.chat_history import ChatMessageHistory
 from langchain_core.tools import render_text_description
 
 import config
