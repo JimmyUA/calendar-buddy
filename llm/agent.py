@@ -7,7 +7,7 @@ from langchain_classic.agents.format_scratchpad.log import format_log_to_str # T
 # from langchain.agents.format_scratchpad.openai_functions import format_to_openai_function_messages # Alternative for function calling
 from langchain_classic.agents.output_parsers.react_single_input import ReActSingleInputOutputParser # Standard parser for ReAct
 
-from langchain.agents import AgentExecutor, create_react_agent
+from langchain.agents.agent_executor import AgentExecutor
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, PromptTemplate # Import PromptTemplate for string formatting
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain.memory import ConversationBufferWindowMemory
