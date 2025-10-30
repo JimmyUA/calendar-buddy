@@ -5,7 +5,7 @@ import ast
 from datetime import datetime, timezone
 
 # Google AI specific imports
-import google.generativeai as genai
+from google import genai
 from google.api_core.exceptions import GoogleAPIError
 
 # Date parsing library (needed for formatting dates within prompts)
@@ -16,25 +16,17 @@ import config # For API Key
 logger = logging.getLogger(__name__)
 
 # --- Google Gemini Setup ---
-gemini_model = None
+gemini_client = None
 llm_available = False
 if config.GOOGLE_API_KEY:
     try:
-        genai.configure(api_key=config.GOOGLE_API_KEY)
-        # Add safety settings or other generation configs if needed
-        # safety_settings = [...]
-        # generation_config=genai.types.GenerationConfig(temperature=0.7)
-        gemini_model = genai.GenerativeModel(
-            'gemini-1.5-flash', # Or specify your preferred model
-            # generation_config=generation_config,
-            # safety_settings=safety_settings
-            )
-        # Optional quick test call (can be commented out)
-        # gemini_model.generate_content("test", generation_config=genai.types.GenerationConfig(max_output_tokens=5))
+        gemini_client = genai.Client(api_key=config.GOOGLE_API_KEY)
+        # The model is now specified in each call, so we don't initialize it here.
+        # We can do a quick test if needed by making a sample call.
         llm_available = True
-        logger.info("LLM Service: Google Generative AI configured successfully.")
+        logger.info("LLM Service: Google GenAI Client configured successfully.")
     except Exception as e:
-        logger.error(f"LLM Service: Failed to configure Google Generative AI: {e}", exc_info=True)
+        logger.error(f"LLM Service: Failed to configure Google GenAI Client: {e}", exc_info=True)
 else:
     logger.warning("LLM Service: Google API Key not found. LLM features disabled.")
 
@@ -43,16 +35,19 @@ else:
 
 async def extract_text_from_image(image_bytes: bytes) -> str | None:
     """Extract text or a short description from an image."""
-    if not llm_available or not gemini_model:
+    if not llm_available or not gemini_client:
         logger.error("LLM Service (Image): LLM not available.")
         return None
 
     prompt = "Describe any text or important details in this image."
     try:
-        response = await gemini_model.generate_content_async([
-            {"inline_data": {"mime_type": "image/jpeg", "data": image_bytes}},
-            {"text": prompt},
-        ])
+        response = await gemini_client.aio.models.generate_content(
+            model='gemini-1.5-flash',
+            contents=[
+                {"inline_data": {"mime_type": "image/jpeg", "data": image_bytes}},
+                {"text": prompt},
+            ]
+        )
 
         if getattr(response, "prompt_feedback", None) and getattr(response.prompt_feedback, "block_reason", None):
             logger.warning(f"LLM image description blocked: {response.prompt_feedback.block_reason}")
@@ -75,14 +70,15 @@ async def extract_text_from_image(image_bytes: bytes) -> str | None:
 
 async def transcribe_audio(audio_bytes: bytes) -> str | None:
     """Transcribe audio bytes to text using the Gemini model."""
-    if not llm_available or not gemini_model:
+    if not llm_available or not gemini_client:
         logger.error("LLM Service (Audio): LLM not available.")
         return None
 
     prompt = "Transcribe the spoken words in this audio into text."
     try:
-        response = await gemini_model.generate_content_async(
-            [
+        response = await gemini_client.aio.models.generate_content(
+            model='gemini-1.5-flash',
+            contents=[
                 {"inline_data": {"mime_type": "audio/ogg", "data": audio_bytes}},
                 {"text": prompt},
             ]
@@ -125,7 +121,7 @@ async def get_chat_response(history: list[dict]) -> str | None:
     Returns:
         The LLM's response text string or None on error/block.
     """
-    if not llm_available or not gemini_model:
+    if not llm_available or not gemini_client:
         logger.error("LLM Service (Chat): LLM not available.")
         return None
     if not history:
@@ -153,9 +149,10 @@ async def get_chat_response(history: list[dict]) -> str | None:
 
     try:
         logger.debug(f"LLM Chat Request History (last 2 items): {formatted_history[-2:]}")
-        # Pass the history directly to generate_content_async
-        response = await gemini_model.generate_content_async(
-            formatted_history,
+        # Pass the history directly to generate_content
+        response = await gemini_client.aio.models.generate_content(
+            model='gemini-1.5-flash',
+            contents=formatted_history,
             # Optional: Add safety settings, generation config here if needed
             # safety_settings=...,
             # generation_config=...
@@ -194,7 +191,7 @@ async def classify_intent_and_extract_params(text: str, current_time_iso: str) -
 
     Intents: CALENDAR_SUMMARY, CALENDAR_CREATE, CALENDAR_DELETE, GENERAL_CHAT
     """
-    if not llm_available or not gemini_model:
+    if not llm_available or not gemini_client:
         logger.error("LLM Service (Intent): LLM not available.")
         return None
 
@@ -218,7 +215,10 @@ async def classify_intent_and_extract_params(text: str, current_time_iso: str) -
     """
     try:
         logger.debug(f"LLM Intent Request: '{text[:100]}...'")
-        response = await gemini_model.generate_content_async(prompt)
+        response = await gemini_client.aio.models.generate_content(
+            model='gemini-1.5-flash',
+            contents=prompt
+        )
 
         if response.prompt_feedback and response.prompt_feedback.block_reason:
              logger.warning(f"LLM intent classification blocked: {response.prompt_feedback.block_reason}")
@@ -299,7 +299,7 @@ async def classify_intent_and_extract_params(text: str, current_time_iso: str) -
 
 async def parse_date_range_llm(text_period: str, current_time_iso: str) -> dict | None:
     """Uses LLM to parse time period. Requires user's current time."""
-    if not llm_available or not gemini_model: logger.error(...); return None
+    if not llm_available or not gemini_client: logger.error("LLM Service (Date Range): LLM not available."); return None
 
     # Use the provided current_time_iso
     prompt = f"""
@@ -312,7 +312,10 @@ async def parse_date_range_llm(text_period: str, current_time_iso: str) -> dict 
     """
     try:
         logger.debug(f"LLM Date Range Request: '{text_period}'")
-        response = await gemini_model.generate_content_async(prompt)
+        response = await gemini_client.aio.models.generate_content(
+            model='gemini-1.5-flash',
+            contents=prompt
+        )
 
         if response.prompt_feedback and response.prompt_feedback.block_reason: logger.warning(f"LLM date range parsing blocked: {response.prompt_feedback.block_reason}"); return None
         if not hasattr(response, 'text'): logger.warning("LLM response for date range parsing missing 'text'."); return None
@@ -342,7 +345,7 @@ async def parse_date_range_llm(text_period: str, current_time_iso: str) -> dict 
 
 async def extract_event_details_llm(text: str, current_time_iso: str) -> dict | None:
     """Uses LLM to extract event details. Requires user's current time."""
-    if not llm_available or not gemini_model: logger.error(...); return None
+    if not llm_available or not gemini_client: logger.error("LLM Service (Event Extract): LLM not available."); return None
 
     # Use the provided current_time_iso
     prompt = f"""
@@ -355,7 +358,10 @@ async def extract_event_details_llm(text: str, current_time_iso: str) -> dict | 
     """
     try:
         logger.debug(f"LLM Event Extract Request: '{text[:100]}...'")
-        response = await gemini_model.generate_content_async(prompt)
+        response = await gemini_client.aio.models.generate_content(
+            model='gemini-1.5-flash',
+            contents=prompt
+        )
 
         if response.prompt_feedback and response.prompt_feedback.block_reason: logger.warning(f"LLM event extract blocked: {response.prompt_feedback.block_reason}"); return None
         if not hasattr(response, 'text'): logger.warning("LLM response for event extract missing 'text'."); return None
@@ -384,7 +390,7 @@ async def extract_event_details_llm(text: str, current_time_iso: str) -> dict | 
 
 async def find_event_match_llm(user_request: str, candidate_events: list, current_time_iso: str) -> dict | None:
     """Uses LLM to find best event match. Requires user's current time."""
-    if not llm_available or not gemini_model: logger.error(...); return None
+    if not llm_available or not gemini_client: logger.error("LLM Service (Event Match): LLM not available."); return None
     if not candidate_events: return {'match_type': 'NONE'}
 
     # Format candidate events (no change needed here)
@@ -407,7 +413,10 @@ async def find_event_match_llm(user_request: str, candidate_events: list, curren
     """
     try:
         logger.debug(f"LLM Event Match Request: '{user_request[:50]}...' with {len(candidate_events)} candidates.")
-        response = await gemini_model.generate_content_async(prompt)
+        response = await gemini_client.aio.models.generate_content(
+            model='gemini-1.5-flash',
+            contents=prompt
+        )
 
         if response.prompt_feedback and response.prompt_feedback.block_reason: logger.warning(f"LLM event matching blocked: {response.prompt_feedback.block_reason}"); return None
         if not hasattr(response, 'text'): logger.warning("LLM response for event matching missing 'text'."); return None
@@ -465,7 +474,7 @@ def _parse_llm_json_output(llm_output: str) -> dict | None:
 
 async def extract_read_args_llm(text_period: str, current_time_iso: str) -> dict | None:
     """Uses LLM to get start_iso and end_iso for reading calendar events."""
-    if not llm_available or not gemini_model: logger.error(...); return None
+    if not llm_available or not gemini_client: logger.error("LLM Service (Read Args): LLM not available."); return None
     prompt = f"""
     Analyze the time period description relative to the user's current time ({current_time_iso}).
     Determine the precise start and end datetime. Assume standard interpretations (e.g., 'today' is 00:00 to 23:59, 'next week' is Mon-Sun).
@@ -478,10 +487,13 @@ async def extract_read_args_llm(text_period: str, current_time_iso: str) -> dict
     """
     try:
         logger.debug(f"LLM Read Args Request: '{text_period}'")
-        response = await gemini_model.generate_content_async(prompt)
+        response = await gemini_client.aio.models.generate_content(
+            model='gemini-1.5-flash',
+            contents=prompt
+        )
         # --- Standard Response Handling ---
-        if response.prompt_feedback and response.prompt_feedback.block_reason: logger.warning(...); return None
-        if not hasattr(response, 'text'): logger.warning(...); return None
+        if response.prompt_feedback and response.prompt_feedback.block_reason: logger.warning("LLM read args blocked."); return None
+        if not hasattr(response, 'text'): logger.warning("LLM response for read args missing 'text'."); return None
         # --- Parsing ---
         parsed_args = _parse_llm_json_output(response.text)
         # --- Validation ---
@@ -497,7 +509,7 @@ async def extract_read_args_llm(text_period: str, current_time_iso: str) -> dict
 
 async def extract_search_args_llm(text_query: str, current_time_iso: str) -> dict | None:
     """Uses LLM to get query, start_iso, and end_iso for searching calendar events."""
-    if not llm_available or not gemini_model: logger.error(...); return None
+    if not llm_available or not gemini_client: logger.error("LLM Service (Search Args): LLM not available."); return None
     prompt = f"""
     Analyze the user's search request relative to their current time ({current_time_iso}).
     Identify the core search query keywords/phrase.
@@ -511,10 +523,13 @@ async def extract_search_args_llm(text_query: str, current_time_iso: str) -> dic
     """
     try:
         logger.debug(f"LLM Search Args Request: '{text_query}'")
-        response = await gemini_model.generate_content_async(prompt)
+        response = await gemini_client.aio.models.generate_content(
+            model='gemini-1.5-flash',
+            contents=prompt
+        )
         # --- Standard Response Handling & Parsing ---
-        if response.prompt_feedback and response.prompt_feedback.block_reason: logger.warning(...); return None
-        if not hasattr(response, 'text'): logger.warning(...); return None
+        if response.prompt_feedback and response.prompt_feedback.block_reason: logger.warning("LLM search args blocked."); return None
+        if not hasattr(response, 'text'): logger.warning("LLM response for search args missing 'text'."); return None
         parsed_args = _parse_llm_json_output(response.text)
         # --- Validation ---
         if not parsed_args or 'query' not in parsed_args or 'start_iso' not in parsed_args or 'end_iso' not in parsed_args:
@@ -528,7 +543,7 @@ async def extract_search_args_llm(text_query: str, current_time_iso: str) -> dic
 
 async def extract_create_args_llm(event_description: str, current_time_iso: str, user_timezone_str: str) -> dict | None:
     """Uses LLM to extract the full event body dictionary for creation."""
-    if not llm_available or not gemini_model: logger.error(...); return None
+    if not llm_available or not gemini_client: logger.error("LLM Service (Create Args): LLM not available."); return None
     prompt = f"""
     Analyze the user's request to create an event, considering their current time is {current_time_iso} and their timezone is {user_timezone_str}.
     Extract all relevant details (summary, start time, end time, description, location).
@@ -542,10 +557,13 @@ async def extract_create_args_llm(event_description: str, current_time_iso: str,
     """
     try:
         logger.debug(f"LLM Create Args Request: '{event_description[:100]}...'")
-        response = await gemini_model.generate_content_async(prompt)
+        response = await gemini_client.aio.models.generate_content(
+            model='gemini-1.5-flash',
+            contents=prompt
+        )
         # --- Standard Response Handling & Parsing ---
-        if response.prompt_feedback and response.prompt_feedback.block_reason: logger.warning(...); return None
-        if not hasattr(response, 'text'): logger.warning(...); return None
+        if response.prompt_feedback and response.prompt_feedback.block_reason: logger.warning("LLM create args blocked."); return None
+        if not hasattr(response, 'text'): logger.warning("LLM response for create args missing 'text'."); return None
         event_data = _parse_llm_json_output(response.text)
         # --- Validation ---
         if not event_data or not isinstance(event_data, dict): logger.error(f"LLM Create Args not a dict: {event_data}"); return None
