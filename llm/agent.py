@@ -3,7 +3,7 @@ import logging
 # Langchain Imports
 from langchain_google_genai import ChatGoogleGenerativeAI
 # --> Import ReAct specific formatting helper <--
-from langchain_community.agents.format_scratchpad import format_log_to_str # Try string format
+from langchain_classic.agents.format_scratchpad.log import format_log_to_str # Try string format
 # from langchain.agents.format_scratchpad.openai_functions import format_to_openai_function_messages # Alternative for function calling
 from langchain.agents.output_parsers.react_single_input import ReActSingleInputOutputParser # Standard parser for ReAct
 
