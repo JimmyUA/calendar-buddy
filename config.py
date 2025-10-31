@@ -12,6 +12,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GOOGLE_CLIENT_SECRETS_FILE = os.getenv("GOOGLE_CLIENT_SECRETS_FILE")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY") # For Gemini / LLM Service
 OAUTH_REDIRECT_URI = os.getenv("OAUTH_REDIRECT_URI")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash-001") # Default model
 
 # --- Web Server Settings ---
 WEB_SERVER_HOST = os.getenv("WEB_SERVER_HOST", "127.0.0.1")
@@ -50,6 +51,8 @@ if not GOOGLE_CLIENT_SECRETS_CONTENT:
 # API Key is optional for LLM but features will be disabled
 if not GOOGLE_API_KEY:
     logger.warning("Config: Missing GOOGLE_API_KEY. LLM features will be disabled.")
+if not GEMINI_MODEL:
+    logger.warning("Config: Missing GEMINI_MODEL. Using default model.")
 if not OAUTH_REDIRECT_URI:
     raise ValueError("Missing environment variable: OAUTH_REDIRECT_URI")
 # Raise error if Firestore failed but is required

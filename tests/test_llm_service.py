@@ -27,6 +27,7 @@ def setup_llm(monkeypatch, response):
     monkeypatch.setitem(sys.modules, "dateutil.parser", parser_mod)
     config_mod = types.ModuleType("config")
     config_mod.GOOGLE_API_KEY = "test-key"
+    config_mod.GEMINI_MODEL = "gemini-1.5-flash-001"
     monkeypatch.setitem(sys.modules, "config", config_mod)
 
     llm = importlib.import_module("llm.llm_service")
