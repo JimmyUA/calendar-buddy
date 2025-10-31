@@ -42,7 +42,7 @@ async def extract_text_from_image(image_bytes: bytes) -> str | None:
     prompt = "Describe any text or important details in this image."
     try:
         response = await gemini_client.aio.models.generate_content(
-            model='gemini-1.5-flash',
+            model='gemini-1.5-flash-latest',
             contents=[
                 {"inline_data": {"mime_type": "image/jpeg", "data": image_bytes}},
                 {"text": prompt},
@@ -77,7 +77,7 @@ async def transcribe_audio(audio_bytes: bytes) -> str | None:
     prompt = "Transcribe the spoken words in this audio into text."
     try:
         response = await gemini_client.aio.models.generate_content(
-            model='gemini-1.5-flash',
+            model='gemini-1.5-flash-latest',
             contents=[
                 {"inline_data": {"mime_type": "audio/ogg", "data": audio_bytes}},
                 {"text": prompt},
@@ -151,7 +151,7 @@ async def get_chat_response(history: list[dict]) -> str | None:
         logger.debug(f"LLM Chat Request History (last 2 items): {formatted_history[-2:]}")
         # Pass the history directly to generate_content
         response = await gemini_client.aio.models.generate_content(
-            model='gemini-1.5-flash',
+            model='gemini-1.5-flash-latest',
             contents=formatted_history,
             # Optional: Add safety settings, generation config here if needed
             # safety_settings=...,
@@ -216,7 +216,7 @@ async def classify_intent_and_extract_params(text: str, current_time_iso: str) -
     try:
         logger.debug(f"LLM Intent Request: '{text[:100]}...'")
         response = await gemini_client.aio.models.generate_content(
-            model='gemini-1.5-flash',
+            model='gemini-1.5-flash-latest',
             contents=prompt
         )
 
@@ -313,7 +313,7 @@ async def parse_date_range_llm(text_period: str, current_time_iso: str) -> dict 
     try:
         logger.debug(f"LLM Date Range Request: '{text_period}'")
         response = await gemini_client.aio.models.generate_content(
-            model='gemini-1.5-flash',
+            model='gemini-1.5-flash-latest',
             contents=prompt
         )
 
@@ -359,7 +359,7 @@ async def extract_event_details_llm(text: str, current_time_iso: str) -> dict | 
     try:
         logger.debug(f"LLM Event Extract Request: '{text[:100]}...'")
         response = await gemini_client.aio.models.generate_content(
-            model='gemini-1.5-flash',
+            model='gemini-1.5-flash-latest',
             contents=prompt
         )
 
@@ -414,7 +414,7 @@ async def find_event_match_llm(user_request: str, candidate_events: list, curren
     try:
         logger.debug(f"LLM Event Match Request: '{user_request[:50]}...' with {len(candidate_events)} candidates.")
         response = await gemini_client.aio.models.generate_content(
-            model='gemini-1.5-flash',
+            model='gemini-1.5-flash-latest',
             contents=prompt
         )
 
@@ -488,7 +488,7 @@ async def extract_read_args_llm(text_period: str, current_time_iso: str) -> dict
     try:
         logger.debug(f"LLM Read Args Request: '{text_period}'")
         response = await gemini_client.aio.models.generate_content(
-            model='gemini-1.5-flash',
+            model='gemini-1.5-flash-latest',
             contents=prompt
         )
         # --- Standard Response Handling ---
@@ -524,7 +524,7 @@ async def extract_search_args_llm(text_query: str, current_time_iso: str) -> dic
     try:
         logger.debug(f"LLM Search Args Request: '{text_query}'")
         response = await gemini_client.aio.models.generate_content(
-            model='gemini-1.5-flash',
+            model='gemini-1.5-flash-latest',
             contents=prompt
         )
         # --- Standard Response Handling & Parsing ---
@@ -558,7 +558,7 @@ async def extract_create_args_llm(event_description: str, current_time_iso: str,
     try:
         logger.debug(f"LLM Create Args Request: '{event_description[:100]}...'")
         response = await gemini_client.aio.models.generate_content(
-            model='gemini-1.5-flash',
+            model='gemini-1.5-flash-latest',
             contents=prompt
         )
         # --- Standard Response Handling & Parsing ---
