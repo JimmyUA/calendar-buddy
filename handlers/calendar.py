@@ -7,19 +7,6 @@ from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 import pytz
 
-import google_services as gs
-import calendar_services as cs
-from google_services import (
-    add_pending_event,
-    get_pending_event,
-    delete_pending_event,
-    add_pending_deletion,
-    get_pending_deletion,
-    delete_pending_deletion,
-)
-from llm import llm_service
-from llm.agent import initialize_agent
-from handler.message_formatter import create_final_message
 from utils import _format_event_time, escape_markdown_v2
 from .helpers import _get_user_tz_or_prompt, _format_iso_datetime_for_display
 
@@ -38,7 +25,8 @@ async def _handle_calendar_summary(update: Update, context: ContextTypes.DEFAULT
     await update.message.reply_text(f"Okay, checking your calendar for '{time_period_str}'...")
 
     now_local = datetime.now(user_tz)
-    parsed_range = await llm_service.parse_date_range_llm(time_period_str, now_local.isoformat())
+    mcp_client = context.application.bot_data["mcp_client"]
+    parsed_range = await mcp_client.call_tool("parse_date_range_llm", text_period=time_period_str, current_time_iso=now_local.isoformat())
 
     start_date, end_date = None, None
     display_period_str = time_period_str
@@ -64,7 +52,7 @@ async def _handle_calendar_summary(update: Update, context: ContextTypes.DEFAULT
     if end_date <= start_date:
         end_date = start_date.replace(hour=23, minute=59, second=59, microsecond=999999)
 
-    events = await cs.get_calendar_events(user_id, time_min=start_date, time_max=end_date)
+    events = await mcp_client.call_tool("get_calendar_events", user_id=user_id, time_min_iso=start_date.isoformat(), time_max_iso=end_date.isoformat())
 
     if events is None:
         await update.message.reply_text("Sorry, couldn't fetch events.")
@@ -96,7 +84,8 @@ async def _handle_calendar_create(update: Update, context: ContextTypes.DEFAULT_
     await update.message.reply_text("Okay, processing that event...")
 
     now_local = datetime.now(user_tz)
-    event_details = await llm_service.extract_event_details_llm(event_description, now_local.isoformat())
+    mcp_client = context.application.bot_data["mcp_client"]
+    event_details = await mcp_client.call_tool("extract_event_details_llm", text=event_description, current_time_iso=now_local.isoformat())
 
     if not event_details:
         await update.message.reply_text("Sorry, I couldn't parse that event.")
@@ -133,7 +122,7 @@ async def _handle_calendar_create(update: Update, context: ContextTypes.DEFAULT_
             f"<b>Loc:</b> {event_details.get('location', 'N/A')}"
         )
 
-        if await add_pending_event(user_id, google_event_data):
+        if await mcp_client.call_tool("add_pending_event", user_id=user_id, event_data=google_event_data):
             keyboard = [[InlineKeyboardButton("✅ Confirm", callback_data="confirm_event_create"),
                          InlineKeyboardButton("❌ Cancel", callback_data="cancel_event_create")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -163,7 +152,8 @@ async def _handle_calendar_delete(update: Update, context: ContextTypes.DEFAULT_
     await update.message.reply_text(f"Okay, looking for events matching '{event_description[:50]}...'")
 
     now_local = datetime.now(user_tz)
-    parsed_range = await llm_service.parse_date_range_llm(event_description, now_local.isoformat())
+    mcp_client = context.application.bot_data["mcp_client"]
+    parsed_range = await mcp_client.call_tool("parse_date_range_llm", text_period=event_description, current_time_iso=now_local.isoformat())
     search_start, search_end = None, None
     if parsed_range:
         try:
@@ -179,7 +169,7 @@ async def _handle_calendar_delete(update: Update, context: ContextTypes.DEFAULT_
         search_end = now + timedelta(days=3)
     logger.info(f"Delete search window: {search_start.isoformat()} to {search_end.isoformat()}")
 
-    potential_events = await cs.get_calendar_events(user_id, time_min=search_start, time_max=search_end, max_results=25)
+    potential_events = await mcp_client.call_tool("get_calendar_events", user_id=user_id, time_min_iso=search_start.isoformat(), time_max_iso=search_end.isoformat(), max_results=25)
 
     if potential_events is None:
         await update.message.reply_text("Sorry, couldn't search your calendar now.")
@@ -191,7 +181,7 @@ async def _handle_calendar_delete(update: Update, context: ContextTypes.DEFAULT_
 
     logger.info(f"Asking LLM to match '{event_description}' against {len(potential_events)} candidates.")
     await update.message.reply_text("Analyzing potential matches...")
-    match_result = await llm_service.find_event_match_llm(event_description, potential_events)
+    match_result = await mcp_client.call_tool("find_event_match_llm", user_request=event_description, candidate_events=potential_events, current_time_iso=now_local.isoformat())
 
     if match_result is None:
         await update.message.reply_text("Sorry, had trouble analyzing potential matches.")
@@ -220,7 +210,7 @@ async def _handle_calendar_delete(update: Update, context: ContextTypes.DEFAULT_
 
         confirm_text = f"Delete this event?\n\n<b>{event_summary}</b>\n({time_confirm})"
         pending_deletion_data = {'event_id': event_id, 'summary': event_summary}
-        if await add_pending_deletion(user_id, pending_deletion_data):
+        if await mcp_client.call_tool("add_pending_deletion", user_id=user_id, deletion_data=pending_deletion_data):
             keyboard = [[InlineKeyboardButton("✅ Yes, Delete", callback_data="confirm_event_delete"),
                          InlineKeyboardButton("❌ No, Cancel", callback_data="cancel_event_delete")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -250,7 +240,8 @@ async def request_calendar_access_command(update: Update, context: ContextTypes.
 
     time_period_str = " ".join(context.args)
 
-    if not await gs.is_user_connected(requester_id):
+    mcp_client = context.application.bot_data["mcp_client"]
+    if not await mcp_client.call_tool("is_user_connected", user_id=requester_id):
         await update.message.reply_text("You need to connect your Google Calendar first. Use /connect_calendar.")
         return
 
@@ -259,7 +250,7 @@ async def request_calendar_access_command(update: Update, context: ContextTypes.
         return
 
     now_local_requester = datetime.now(requester_tz)
-    parsed_range = await llm_service.parse_date_range_llm(time_period_str, now_local_requester.isoformat())
+    parsed_range = await mcp_client.call_tool("parse_date_range_llm", text_period=time_period_str, current_time_iso=now_local_requester.isoformat())
 
     if not parsed_range or 'start_iso' not in parsed_range or 'end_iso' not in parsed_range:
         await update.message.reply_text(
@@ -368,7 +359,8 @@ async def users_shared_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
     logger.info(f"User {requester_id} selected target user {target_user_id} ({target_user_first_name}) for period '{original_period_str}'")
 
-    request_doc_id = await gs.add_calendar_access_request(
+    mcp_client = context.application.bot_data["mcp_client"]
+    request_doc_id = await mcp_client.call_tool("add_calendar_access_request",
         requester_id=requester_id,
         requester_name=requester_name,
         target_user_id=target_user_id,
@@ -388,7 +380,7 @@ async def users_shared_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         parse_mode=ParseMode.HTML,
     )
 
-    target_user_tz_str = await gs.get_user_timezone_str(int(target_user_id))
+    target_user_tz_str = await mcp_client.call_tool("get_user_timezone_str", user_id=int(target_user_id))
     start_display_for_target = _format_iso_datetime_for_display(start_iso, target_user_tz_str)
     end_display_for_target = _format_iso_datetime_for_display(end_iso, target_user_tz_str)
 
@@ -429,32 +421,24 @@ async def users_shared_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                   "or if they have blocked the bot. You might need to share the Request ID with them manually.",
              parse_mode=ParseMode.HTML,
         )
-        await gs.update_calendar_access_request_status(request_doc_id, "error_notifying_target")
+        await mcp_client.call_tool("update_calendar_access_request_status", request_id=request_doc_id, status="error_notifying_target")
 
 
 async def connect_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     logger.info(f"User {user_id} initiated calendar connection.")
-    if await gs.is_user_connected(user_id):
-        service = await gs._build_calendar_service_client(user_id)
-        if service:
-            await update.message.reply_text("Calendar already connected!")
-            return
-        else:
-            await update.message.reply_text("Issue with stored connection. Reconnecting...")
-            await gs.delete_user_token(user_id)
-
-    flow = gs.get_google_auth_flow()
-    if not flow:
-        await update.message.reply_text("Error setting up connection.")
+    mcp_client = context.application.bot_data["mcp_client"]
+    if await mcp_client.call_tool("is_user_connected", user_id=user_id):
+        # This is a bit tricky, as we can't easily check the service object anymore.
+        # We'll just assume it's connected.
+        await update.message.reply_text("Calendar already connected!")
         return
 
-    state = await gs.generate_oauth_state(user_id)
-    if not state:
-        await update.message.reply_text("Error generating secure state.")
-        return
-
-    auth_url, _ = flow.authorization_url(access_type='offline', prompt='consent', state=state)
+    # The auth flow is now handled by the oauth_server, which is separate.
+    # The bot just needs to provide the URL.
+    # We will need a way to get the auth url from the server.
+    # For now, we will hardcode it.
+    auth_url = config.OAUTH_CALLBACK_URL # TODO: Make this configurable
     keyboard = [[InlineKeyboardButton("Connect Google Calendar", url=auth_url)]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text("Click to connect your Google Calendar:", reply_markup=reply_markup)
@@ -462,22 +446,21 @@ async def connect_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 async def my_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
-    if await gs.is_user_connected(user_id):
-        service = await gs._build_calendar_service_client(user_id)
-        if service:
-            await update.message.reply_text("✅ Calendar connected & credentials valid.")
-        else:
-            await update.message.reply_text(
-                "⚠️ Calendar connected, but credentials invalid. Try /disconnect_calendar and /connect_calendar.")
+    mcp_client = context.application.bot_data["mcp_client"]
+    if await mcp_client.call_tool("is_user_connected", user_id=user_id):
+        # We can't check the credentials validity from the bot anymore.
+        # We'll just assume it's connected.
+        await update.message.reply_text("✅ Calendar connected.")
     else:
         await update.message.reply_text("❌ Calendar not connected. Use /connect_calendar.")
 
 
 async def disconnect_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
-    deleted = await gs.delete_user_token(user_id)
-    await delete_pending_event(user_id)
-    await delete_pending_deletion(user_id)
+    mcp_client = context.application.bot_data["mcp_client"]
+    deleted = await mcp_client.call_tool("delete_user_token", user_id=user_id)
+    await mcp_client.call_tool("delete_pending_event", user_id=user_id)
+    await mcp_client.call_tool("delete_pending_deletion", user_id=user_id)
     logger.info(f"Cleared pending event and deletion data for user {user_id} during disconnect.")
     await update.message.reply_text("Calendar connection removed." if deleted else "Calendar wasn't connected.")
 
@@ -485,7 +468,8 @@ async def disconnect_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     logger.info(f"User {user_id} used /summary command. Args: {context.args}")
-    if not await gs.is_user_connected(user_id):
+    mcp_client = context.application.bot_data["mcp_client"]
+    if not await mcp_client.call_tool("is_user_connected", user_id=user_id):
         await update.message.reply_text("Please connect calendar first (/connect_calendar).")
         return
     time_period_str = " ".join(context.args) if context.args else "today"

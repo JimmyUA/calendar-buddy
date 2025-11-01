@@ -3,7 +3,6 @@ import asyncio
 from typing import Type
 from pydantic import BaseModel  # No specific args
 from langchain.tools import BaseTool
-import grocery_services as gs
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +15,7 @@ class ClearGroceryListTool(BaseTool):
     args_schema: Type[BaseModel] = ClearGroceryListToolInput
     user_id: int
     user_timezone_str: str # Not used
+    mcp_client: object
 
     def _run(self) -> str:
         return asyncio.run(self._arun())
@@ -23,7 +23,7 @@ class ClearGroceryListTool(BaseTool):
     async def _arun(self) -> str:
         logger.info(f"ClearGroceryListTool: Called for user {self.user_id}")
         try:
-            if await gs.delete_grocery_list(self.user_id):
+            if await self.mcp_client.call_tool("delete_grocery_list", user_id=self.user_id):
                 return "Successfully cleared your grocery list."
             else:
                 return "Failed to clear the grocery list due to a service error."

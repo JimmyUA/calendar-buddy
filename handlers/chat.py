@@ -6,17 +6,6 @@ from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 import pytz
 
-import google_services as gs
-import calendar_services as cs
-from google_services import (
-    get_pending_event,
-    delete_pending_event,
-    get_pending_deletion,
-    delete_pending_deletion,
-)
-from handler.message_formatter import create_final_message
-from llm.agent import initialize_agent
-from llm import llm_service
 from utils import _format_event_time
 from .helpers import _get_user_tz_or_prompt, extract_media_text
 
@@ -27,22 +16,23 @@ async def _handle_general_chat(update: Update, context: ContextTypes.DEFAULT_TYP
     user_id = update.effective_user.id
     logger.info(f"Handling GENERAL_CHAT for user {user_id} with history")
 
-    media_text = await extract_media_text(update)
+    media_text = await extract_media_text(update, context)
     if media_text:
         text = f"{text}\n{media_text}" if text else media_text
 
-    history = await gs.get_chat_history(user_id, "general")
+    mcp_client = context.application.bot_data["mcp_client"]
+    history = await mcp_client.call_tool("get_chat_history", user_id=user_id, history_type="general")
     logger.debug(f"General Chat: Loaded {len(history)} messages from Firestore for user {user_id}")
 
     history.append({'role': 'user', 'content': text})
-    await gs.add_chat_message(user_id, 'user', text, "general")
+    await mcp_client.call_tool("add_chat_message", user_id=user_id, role='user', content=text, history_type="general")
 
-    response_text = await llm_service.get_chat_response(history)
+    response_text = await mcp_client.call_tool("get_chat_response", history=history)
 
     if response_text:
         await update.message.reply_text(response_text)
         history.append({'role': 'model', 'content': response_text})
-        await gs.add_chat_message(user_id, 'model', response_text, "general")
+        await mcp_client.call_tool("add_chat_message", user_id=user_id, role='model', content=response_text, history_type="general")
     else:
         await update.message.reply_text("Sorry, I couldn't process that chat message right now.")
         if history and history[-1]['role'] == 'user':
@@ -64,30 +54,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user_id = update.effective_user.id
     text = update.message.text or update.message.caption or ""
 
-    media_text = await extract_media_text(update)
+    media_text = await extract_media_text(update, context)
     if media_text:
         text = f"{text}\n{media_text}" if text else media_text
 
     logger.info(f"Agent Handler: Received message from user {user_id}: '{text[:50]}...'")
 
-    if not await gs.is_user_connected(user_id):
+    mcp_client = context.application.bot_data["mcp_client"]
+    if not await mcp_client.call_tool("is_user_connected", user_id=user_id):
         await update.message.reply_text("Please connect your Google Calendar first using /connect_calendar.")
         return
 
-    user_timezone_str = await gs.get_user_timezone_str(user_id)
+    user_timezone_str = await mcp_client.call_tool("get_user_timezone_str", user_id=user_id)
     if not user_timezone_str:
         user_timezone_str = 'UTC'
         await update.message.reply_text(
             "Note: Your timezone isn't set. Using UTC. Use /set_timezone for accurate local times.")
 
-    chat_history = await gs.get_chat_history(user_id, "lc")
+    chat_history = await mcp_client.call_tool("get_chat_history", user_id=user_id, history_type="lc")
     logger.debug(f"Agent Handler: Loaded {len(chat_history)} messages from Firestore for user {user_id}")
 
     chat_history.append({'role': 'user', 'content': text})
-    await gs.add_chat_message(user_id, 'user', text, "lc")
+    await mcp_client.call_tool("add_chat_message", user_id=user_id, role='user', content=text, history_type="lc")
 
     try:
-        agent_executor = initialize_agent(user_id, user_timezone_str, chat_history)
+        agent_executor = initialize_agent(user_id, user_timezone_str, chat_history, mcp_client)
     except Exception as e:
         logger.error(f"Failed to initialize agent for user {user_id}: {e}", exc_info=True)
         await update.message.reply_text("Sorry, there was an error setting up the AI agent.")
@@ -106,7 +97,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     final_message_to_send = agent_response
     reply_markup = None
 
-    pending_event_data = await get_pending_event(user_id)
+    pending_event_data = await mcp_client.call_tool("get_pending_event", user_id=user_id)
     if pending_event_data:
         logger.info(f"Pending event create found for user {user_id} from Firestore. Formatting confirmation.")
         try:
@@ -118,13 +109,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         except Exception as e:
             logger.error(f"Error formatting create confirmation in handler from Firestore data: {e}", exc_info=True)
             final_message_to_send = f"Error preparing event confirmation: {e}. Please try again."
-            await delete_pending_event(user_id)
+            await mcp_client.call_tool("delete_pending_event", user_id=user_id)
     else:
-        pending_deletion_data = await get_pending_deletion(user_id)
+        pending_deletion_data = await mcp_client.call_tool("get_pending_deletion", user_id=user_id)
         if pending_deletion_data:
             logger.info(f"Pending event delete found for user {user_id} from Firestore. Formatting confirmation.")
             event_id_to_delete = pending_deletion_data.get('event_id')
-            event_details_for_confirm = await cs.get_calendar_event_by_id(user_id, event_id_to_delete)
+            event_details_for_confirm = await mcp_client.call_tool("get_calendar_event_by_id", user_id=user_id, event_id=event_id_to_delete)
 
             if event_details_for_confirm:
                 try:
@@ -155,4 +146,4 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     )
     if agent_response and "error" not in agent_response.lower():
         chat_history.append({'role': 'model', 'content': agent_response})
-        await gs.add_chat_message(user_id, 'model', agent_response, "lc")
+        await mcp_client.call_tool("add_chat_message", user_id=user_id, role='model', content=agent_response, history_type="lc")

@@ -30,7 +30,7 @@ def setup_llm(monkeypatch, response):
     config_mod.GEMINI_MODEL = "gemini-1.5-flash-001"
     monkeypatch.setitem(sys.modules, "config", config_mod)
 
-    llm = importlib.import_module("llm.llm_service")
+    llm = importlib.import_module("server.llm.llm_service")
     gem_model = types.SimpleNamespace(
         aio=types.SimpleNamespace(
             models=types.SimpleNamespace(

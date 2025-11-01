@@ -9,6 +9,8 @@ logger = logging.getLogger(__name__)
 
 # --- Core Bot/API Settings ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:8000")
+OAUTH_CALLBACK_URL = os.getenv("OAUTH_CALLBACK_URL", "http://localhost:8081/oauth2callback")
 GOOGLE_CLIENT_SECRETS_FILE = os.getenv("GOOGLE_CLIENT_SECRETS_FILE")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY") # For Gemini / LLM Service
 OAUTH_REDIRECT_URI = os.getenv("OAUTH_REDIRECT_URI")

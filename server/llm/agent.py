@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 # === Agent Initialization (Helper) ===
 
-def initialize_agent(user_id: int, user_timezone_str: str, chat_history: list) -> AgentExecutor:
+def initialize_agent(user_id: int, user_timezone_str: str, chat_history: list, mcp_client) -> AgentExecutor:
     """Initializes and returns a LangChain agent executor for the user."""
 
     # 1. Initialize LLM
@@ -28,7 +28,7 @@ def initialize_agent(user_id: int, user_timezone_str: str, chat_history: list) -
         logger.error(f"Failed to initialize LLM: {e}", exc_info=True); raise
 
     # 2. Get Tools with Context
-    tools = get_tools(user_id=user_id, user_timezone_str=user_timezone_str)
+    tools = get_tools(user_id=user_id, user_timezone_str=user_timezone_str, mcp_client=mcp_client)
 
     # 3. Create Prompt Template - Reverting to a more standard ReAct structure
     #    The core idea is to render tools into a string and have the LLM generate

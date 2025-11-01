@@ -2,6 +2,7 @@
 import logging
 import threading # Import threading
 from flask import Flask # Import Flask
+from fastmcp import Client
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -76,6 +77,9 @@ def main() -> None:
                    .connection_pool_size(10)
                    .concurrent_updates(True)
                    .build())
+
+    mcp_client = Client(config.MCP_SERVER_URL)
+    application.bot_data["mcp_client"] = mcp_client
 
     # --- Setup /set_timezone conversation ---
     timezone_conv_handler = ConversationHandler(

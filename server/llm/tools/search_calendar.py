@@ -4,8 +4,6 @@ from datetime import datetime
 import pytz  # For timezone handling
 from pytz.exceptions import UnknownTimeZoneError
 
-import google_services as gs
-import calendar_services as cs
 from llm import llm_service
 from llm.tools.calendar_base import CalendarBaseTool
 from llm.tools.formatting import format_event_list_for_agent
@@ -18,6 +16,7 @@ class SearchCalendarEventsTool(CalendarBaseTool):
     description: str = ("Input is a natural language search query, potentially including a time period (e.g., "
                         "'project alpha meeting next month'). Searches events based on keywords. Returns event "
                         "summaries, times, and IDs.")
+    mcp_client: object
 
     # args_schema: Type[BaseModel] = CalendarSearchInput # Removed schema
 
@@ -43,8 +42,8 @@ class SearchCalendarEventsTool(CalendarBaseTool):
         end_iso = parsed_args['end_iso']
 
         # 3. Search events using structured args
-        events = await cs.search_calendar_events(
-            self.user_id,
+        events = await self.mcp_client.call_tool("search_calendar_events",
+            user_id=self.user_id,
             query=query,
             time_min_iso=start_iso,
             time_max_iso=end_iso,

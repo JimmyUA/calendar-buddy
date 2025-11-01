@@ -11,6 +11,7 @@ class DummyApplication:
         self.error_handler = None
         self.run_called = False
         self.allowed_updates = None
+        self.bot_data = {}
 
     def add_handler(self, handler):
         self.handlers.append(handler)
@@ -51,6 +52,11 @@ class DummyThread:
 
 @pytest.fixture
 def bot_module(monkeypatch):
+    # stub fastmcp
+    fastmcp_mod = types.ModuleType("fastmcp")
+    fastmcp_mod.Client = lambda *a, **k: None
+    monkeypatch.setitem(sys.modules, "fastmcp", fastmcp_mod)
+
     # stub config
     config_mod = types.ModuleType("config")
     config_mod.os = types.SimpleNamespace(getenv=lambda k, default=None: default)

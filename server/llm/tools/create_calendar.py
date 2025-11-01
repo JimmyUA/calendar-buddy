@@ -5,7 +5,6 @@ import pytz  # For timezone handling
 from dateutil import parser as dateutil_parser
 from pytz.exceptions import UnknownTimeZoneError
 
-from google_services import add_pending_event, delete_pending_deletion # delete_pending_deletion for clearing
 from llm import llm_service
 from llm.tools.calendar_base import CalendarBaseTool
 
@@ -17,6 +16,7 @@ class CreateCalendarEventTool(CalendarBaseTool):
     description: str = ("Input is a natural language description of the event to create (e.g., 'Meeting with Bob "
                         "tomorrow 3pm about project X'). Prepares the event and asks the user for confirmation before "
                         "actually creating it.")
+    mcp_client: object
 
     # No args_schema needed if taking simple string
 
@@ -63,7 +63,7 @@ class CreateCalendarEventTool(CalendarBaseTool):
             return "Error: Could not process the extracted event details for confirmation."
 
         # 3. Store pending action data (the structured data needed by Google API)
-        if await add_pending_event(self.user_id, event_data):
+        if await self.mcp_client.call_tool("add_pending_event", user_id=self.user_id, event_data=event_data):
             # Clear any pending delete for the same user to avoid conflicting states
             # This is a direct replacement for the previous logic, assuming it's still desired.
             # If this cross-state clearing is handled elsewhere (e.g. handlers), this can be removed.

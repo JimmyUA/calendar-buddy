@@ -159,7 +159,9 @@ def gs_module(monkeypatch):
     # ensure clean import
     if "grocery_services" in sys.modules:
         del sys.modules["grocery_services"]
-    gs = importlib.import_module("grocery_services")
+    if "server.grocery_services" in sys.modules:
+        del sys.modules["server.grocery_services"]
+    gs = importlib.import_module("server.grocery_services")
 
     # replace the Firestore collection with our fake implementation
     fake_collection = FakeCollection()

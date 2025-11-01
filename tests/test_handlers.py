@@ -145,16 +145,18 @@ def test_format_iso_datetime_for_display_invalid_timezone(handlers_module, caplo
 
 
 # ---------- Tests for _get_user_tz_or_prompt ----------
-def test_get_user_tz_or_prompt_returns_timezone(handlers_module, monkeypatch):
+def test_get_user_tz_or_prompt_returns_timezone(handlers_module):
     mock_update = MagicMock()
     mock_message = MagicMock()
     mock_update.effective_user.id = 1
     mock_update.message = mock_message
     mock_message.reply_text = AsyncMock()
 
-    mock_context = MagicMock()
+    mcp_client_mock = MagicMock()
+    mcp_client_mock.call_tool = AsyncMock(return_value="UTC")
 
-    monkeypatch.setattr(handlers_module.gs, "get_user_timezone_str", AsyncMock(return_value="UTC"))
+    mock_context = MagicMock()
+    mock_context.application.bot_data = {"mcp_client": mcp_client_mock}
 
     tz = asyncio.run(handlers_module._get_user_tz_or_prompt(mock_update, mock_context))
 
@@ -162,16 +164,18 @@ def test_get_user_tz_or_prompt_returns_timezone(handlers_module, monkeypatch):
     mock_message.reply_text.assert_not_called()
 
 
-def test_get_user_tz_or_prompt_prompts_when_missing(handlers_module, monkeypatch):
+def test_get_user_tz_or_prompt_prompts_when_missing(handlers_module):
     mock_update = MagicMock()
     mock_message = MagicMock()
     mock_update.effective_user.id = 1
     mock_update.message = mock_message
     mock_message.reply_text = AsyncMock()
 
-    mock_context = MagicMock()
+    mcp_client_mock = MagicMock()
+    mcp_client_mock.call_tool = AsyncMock(return_value=None)
 
-    monkeypatch.setattr(handlers_module.gs, "get_user_timezone_str", AsyncMock(return_value=None))
+    mock_context = MagicMock()
+    mock_context.application.bot_data = {"mcp_client": mcp_client_mock}
 
     tz = asyncio.run(handlers_module._get_user_tz_or_prompt(mock_update, mock_context))
 
@@ -214,33 +218,9 @@ def test_menu_command_shows_keyboard(handlers_module):
 
 
 def test_handle_message_photo_caption(monkeypatch, handlers_module):
-    # patch google services
-    monkeypatch.setattr(handlers_module.gs, "is_user_connected", AsyncMock(return_value=True), raising=False)
-    monkeypatch.setattr(handlers_module.gs, "get_user_timezone_str", AsyncMock(return_value="UTC"), raising=False)
-    monkeypatch.setattr(handlers_module.gs, "get_chat_history", AsyncMock(return_value=[]), raising=False)
-    monkeypatch.setattr(handlers_module.gs, "add_chat_message", AsyncMock(), raising=False)
-    monkeypatch.setattr(handlers_module, "get_pending_event", AsyncMock(return_value=None), raising=False)
-    monkeypatch.setattr(handlers_module, "delete_pending_event", AsyncMock(), raising=False)
-    monkeypatch.setattr(handlers_module, "get_pending_deletion", AsyncMock(return_value=None), raising=False)
-    monkeypatch.setattr(handlers_module, "delete_pending_deletion", AsyncMock(), raising=False)
-    monkeypatch.setattr(
-        handlers_module.chat.cs,
-        "get_calendar_event_by_id",
-        AsyncMock(return_value=None),
-        raising=False,
-    )
-
-    # patch LLM service and agent
+    # patch media extraction
     extract_mock = AsyncMock(return_value="image text")
-    monkeypatch.setattr(handlers_module.chat.llm_service, "extract_text_from_image", extract_mock, raising=False)
-
-    called = {}
-    class DummyExecutor:
-        async def ainvoke(self, data):
-            called["input"] = data
-            return {"output": "agent reply"}
-
-    monkeypatch.setattr(handlers_module.chat, "initialize_agent", lambda *a, **k: DummyExecutor())
+    monkeypatch.setattr(handlers_module.chat, "extract_media_text", extract_mock)
 
     # build update with photo and caption
     dummy_file = types.SimpleNamespace(download_as_bytearray=AsyncMock(return_value=b"img"))
@@ -249,6 +229,8 @@ def test_handle_message_photo_caption(monkeypatch, handlers_module):
     message.text = None
     message.caption = "caption"
     message.photo = [dummy_photo]
+    message.voice = None
+    message.audio = None
     message.chat = types.SimpleNamespace(send_action=AsyncMock())
     message.reply_text = AsyncMock()
 
@@ -256,42 +238,32 @@ def test_handle_message_photo_caption(monkeypatch, handlers_module):
     update.message = message
     update.effective_user.id = 1
 
+    # setup mcp_client mock to simulate GENERAL_CHAT intent
+    mcp_client_mock = AsyncMock()
+    mcp_client_mock.call_tool.side_effect = [
+        True,  # is_user_connected
+        "UTC",  # get_user_timezone_str
+        {"intent": "GENERAL_CHAT", "parameters": {}},  # classify_intent
+    ]
+
     context = MagicMock()
+    context.application.bot_data = {"mcp_client": mcp_client_mock}
+
+    # mock the dispatched-to function
+    handle_general_chat_mock = AsyncMock()
+    monkeypatch.setattr(handlers_module.chat, "_handle_general_chat", handle_general_chat_mock)
 
     asyncio.run(handlers_module.handle_message(update, context))
 
     extract_mock.assert_awaited_once()
-    assert called["input"] == {"input": "caption\nimage text"}
-    message.reply_text.assert_called_once()
+    assert mcp_client_mock.call_tool.call_count == 3
+    handle_general_chat_mock.assert_awaited_once_with(update, context, "caption\nimage text")
 
 
 def test_handle_message_voice(monkeypatch, handlers_module):
-    monkeypatch.setattr(handlers_module.gs, "is_user_connected", AsyncMock(return_value=True), raising=False)
-    monkeypatch.setattr(handlers_module.gs, "get_user_timezone_str", AsyncMock(return_value="UTC"), raising=False)
-    monkeypatch.setattr(handlers_module.gs, "get_chat_history", AsyncMock(return_value=[]), raising=False)
-    monkeypatch.setattr(handlers_module.gs, "add_chat_message", AsyncMock(), raising=False)
-    monkeypatch.setattr(handlers_module, "get_pending_event", AsyncMock(return_value=None), raising=False)
-    monkeypatch.setattr(handlers_module, "delete_pending_event", AsyncMock(), raising=False)
-    monkeypatch.setattr(handlers_module, "get_pending_deletion", AsyncMock(return_value=None), raising=False)
-    monkeypatch.setattr(handlers_module, "delete_pending_deletion", AsyncMock(), raising=False)
-    monkeypatch.setattr(
-        handlers_module.chat.cs,
-        "get_calendar_event_by_id",
-        AsyncMock(return_value=None),
-        raising=False,
-    )
-
-    transcribe_mock = AsyncMock(return_value="voice text")
-    monkeypatch.setattr(handlers_module.chat.llm_service, "transcribe_audio", transcribe_mock, raising=False)
-
-    called = {}
-
-    class DummyExecutor:
-        async def ainvoke(self, data):
-            called["input"] = data
-            return {"output": "agent reply"}
-
-    monkeypatch.setattr(handlers_module.chat, "initialize_agent", lambda *a, **k: DummyExecutor())
+    # patch media extraction
+    extract_mock = AsyncMock(return_value="voice text")
+    monkeypatch.setattr(handlers_module.chat, "extract_media_text", extract_mock)
 
     dummy_file = types.SimpleNamespace(download_as_bytearray=AsyncMock(return_value=b"audio"))
     dummy_voice = types.SimpleNamespace(get_file=AsyncMock(return_value=dummy_file))
@@ -308,10 +280,23 @@ def test_handle_message_voice(monkeypatch, handlers_module):
     update.message = message
     update.effective_user.id = 1
 
+    # setup mcp_client mock to simulate GENERAL_CHAT intent
+    mcp_client_mock = AsyncMock()
+    mcp_client_mock.call_tool.side_effect = [
+        True,  # is_user_connected
+        "UTC",  # get_user_timezone_str
+        {"intent": "GENERAL_CHAT", "parameters": {}},  # classify_intent
+    ]
+
     context = MagicMock()
+    context.application.bot_data = {"mcp_client": mcp_client_mock}
+
+    # mock the dispatched-to function
+    handle_general_chat_mock = AsyncMock()
+    monkeypatch.setattr(handlers_module.chat, "_handle_general_chat", handle_general_chat_mock)
 
     asyncio.run(handlers_module.handle_message(update, context))
 
-    transcribe_mock.assert_awaited_once()
-    assert called["input"] == {"input": "voice text"}
-    message.reply_text.assert_called_once()
+    extract_mock.assert_awaited_once()
+    assert mcp_client_mock.call_tool.call_count == 3
+    handle_general_chat_mock.assert_awaited_once_with(update, context, "voice text")

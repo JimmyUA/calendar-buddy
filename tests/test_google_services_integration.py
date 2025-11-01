@@ -184,9 +184,58 @@ def gs_module(monkeypatch):
     monkeypatch.setitem(sys.modules, "google.api_core", api_core_mod)
     monkeypatch.setitem(sys.modules, "google.api_core.exceptions", exceptions_mod)
 
+    services_mod = types.ModuleType("services")
+    pending_mod = types.ModuleType("services.pending")
+    prefs_mod = types.ModuleType("services.preferences")
+    async def async_true(*args, **kwargs):
+        return True
+
+    # a bit of a hack to simulate the firestore db
+    db = {"pe": {}, "pd": {}, "prefs": {}}
+
+    async def add_pending_event(user_id, event_data):
+        db["pe"][user_id] = event_data
+        return True
+    async def get_pending_event(user_id):
+        return db["pe"].get(user_id)
+    async def delete_pending_event(user_id):
+        db["pe"].pop(user_id, None)
+        return True
+    async def add_pending_deletion(user_id, deletion_data):
+        db["pd"][user_id] = deletion_data
+        return True
+    async def get_pending_deletion(user_id):
+        return db["pd"].get(user_id)
+    async def delete_pending_deletion(user_id):
+        db["pd"].pop(user_id, None)
+        return True
+    async def set_user_timezone(user_id, timezone_str):
+        if timezone_str == "Invalid/Zone":
+            return False
+        db["prefs"][user_id] = timezone_str
+        return True
+    async def get_user_timezone_str(user_id):
+        return db["prefs"].get(user_id)
+
+    pending_mod.add_pending_event = add_pending_event
+    pending_mod.get_pending_event = get_pending_event
+    pending_mod.delete_pending_event = delete_pending_event
+    pending_mod.add_pending_deletion = add_pending_deletion
+    pending_mod.get_pending_deletion = get_pending_deletion
+    pending_mod.delete_pending_deletion = delete_pending_deletion
+    prefs_mod.set_user_timezone = set_user_timezone
+    prefs_mod.get_user_timezone_str = get_user_timezone_str
+    services_mod.pending = pending_mod
+    services_mod.preferences = prefs_mod
+    monkeypatch.setitem(sys.modules, "services", services_mod)
+    monkeypatch.setitem(sys.modules, "services.pending", pending_mod)
+    monkeypatch.setitem(sys.modules, "services.preferences", prefs_mod)
+
     if "google_services" in sys.modules:
         del sys.modules["google_services"]
-    gs = importlib.import_module("google_services")
+    if "server.google_services" in sys.modules:
+        del sys.modules["server.google_services"]
+    gs = importlib.import_module("server.google_services")
     return gs
 
 # ---- Tests ----

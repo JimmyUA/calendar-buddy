@@ -4,8 +4,6 @@ from telegram import Update
 from telegram.ext import ContextTypes
 import pytz
 from pytz.exceptions import UnknownTimeZoneError
-import google_services as gs
-from llm import llm_service
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +37,8 @@ async def _get_user_tz_or_prompt(update: Update, context: ContextTypes.DEFAULT_T
     """Get user's timezone object or prompt them to set it."""
     user_id = update.effective_user.id
     assert update.message is not None, "Update message should not be None for _get_user_tz_or_prompt"
-    tz_str = await gs.get_user_timezone_str(user_id)
+    mcp_client = context.application.bot_data["mcp_client"]
+    tz_str = await mcp_client.call_tool("get_user_timezone_str", user_id=user_id)
     if tz_str:
         try:
             return pytz.timezone(tz_str)
@@ -50,18 +49,19 @@ async def _get_user_tz_or_prompt(update: Update, context: ContextTypes.DEFAULT_T
     return None
 
 
-async def extract_media_text(update: Update) -> str:
+async def extract_media_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
     """Extract text from photo, voice or audio in the update using LLM service."""
     if not update.message:
         return ""
 
     text_parts: list[str] = []
+    mcp_client = context.application.bot_data["mcp_client"]
 
     if update.message.photo:
         try:
             file = await update.message.photo[-1].get_file()
             image_bytes = await file.download_as_bytearray()
-            img_text = await llm_service.extract_text_from_image(bytes(image_bytes))
+            img_text = await mcp_client.call_tool("extract_text_from_image", image_bytes=bytes(image_bytes))
             if img_text:
                 text_parts.append(img_text)
         except Exception as e:  # pragma: no cover - logging only
@@ -72,7 +72,7 @@ async def extract_media_text(update: Update) -> str:
             voice_or_audio = update.message.voice or update.message.audio
             file = await voice_or_audio.get_file()
             audio_bytes = await file.download_as_bytearray()
-            audio_text = await llm_service.transcribe_audio(bytes(audio_bytes))
+            audio_text = await mcp_client.call_tool("transcribe_audio", audio_bytes=bytes(audio_bytes))
             if audio_text:
                 text_parts.append(audio_text)
         except Exception as e:  # pragma: no cover - logging only

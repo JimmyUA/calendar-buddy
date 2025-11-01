@@ -3,7 +3,6 @@ import asyncio
 from typing import Type, List
 from pydantic import BaseModel, Field
 from langchain.tools import BaseTool
-import grocery_services as gs
 
 logger = logging.getLogger(__name__)
 
@@ -14,8 +13,9 @@ class AddGroceryItemTool(BaseTool):
     name: str = "add_grocery_item"
     description: str = "Adds one or more items to the user's grocery list. Input should be a comma-separated string of items."
     args_schema: Type[BaseModel] = AddGroceryItemToolInput
-    user_id: int # Set during instantiation
-    user_timezone_str: str # Set during instantiation, though not strictly needed for this tool
+    user_id: int
+    user_timezone_str: str
+    mcp_client: object
 
     def _run(self, items: str) -> str:
         return asyncio.run(self._arun(items))
@@ -36,7 +36,7 @@ class AddGroceryItemTool(BaseTool):
             )
 
         try:
-            if await gs.add_to_grocery_list(self.user_id, item_list):
+            if await self.mcp_client.call_tool("add_to_grocery_list", user_id=self.user_id, items_to_add=item_list):
                 return (
                     f"Successfully added: {', '.join(item_list)} to your grocery list."
                 )

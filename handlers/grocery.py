@@ -5,8 +5,6 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKe
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
-import grocery_services as gls
-import google_services as gs
 from .helpers import _get_user_tz_or_prompt
 
 logger = logging.getLogger(__name__)
@@ -33,7 +31,8 @@ async def _handle_glist_share_selection(update: Update, context: ContextTypes.DE
         return
 
     requester_name = update.effective_user.first_name or "User"
-    request_doc_id = await gs.add_grocery_share_request(requester_id, requester_name, target_user_id)
+    mcp_client = context.application.bot_data["mcp_client"]
+    request_doc_id = await mcp_client.call_tool("add_grocery_share_request", requester_id=requester_id, requester_name=requester_name, target_user_id=target_user_id)
     if not request_doc_id:
         await context.bot.send_message(chat_id=requester_id, text="Failed to store share request.")
         return
@@ -69,8 +68,8 @@ async def glist_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     items_to_add = list(context.args)
-
-    if await gls.add_to_grocery_list(user_id, items_to_add):
+    mcp_client = context.application.bot_data["mcp_client"]
+    if await mcp_client.call_tool("add_to_grocery_list", user_id=user_id, items_to_add=items_to_add):
         logger.info(f"Successfully added {len(items_to_add)} items for user {user_id}.")
         await update.message.reply_text(
             f"Added: {', '.join(items_to_add)} to your grocery list.",
@@ -86,7 +85,8 @@ async def glist_show(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     user_id = update.effective_user.id
     logger.info(f"User {user_id} requesting to show grocery list.")
 
-    grocery_list = await gls.get_grocery_list(user_id)
+    mcp_client = context.application.bot_data["mcp_client"]
+    grocery_list = await mcp_client.call_tool("get_grocery_list", user_id=user_id)
 
     if grocery_list is None:
         logger.error(f"Failed to retrieve grocery list for user {user_id} (gs returned None).")
@@ -110,8 +110,8 @@ async def glist_show(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 async def glist_clear(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     logger.info(f"User {user_id} requesting to clear grocery list.")
-
-    if await gls.delete_grocery_list(user_id):
+    mcp_client = context.application.bot_data["mcp_client"]
+    if await mcp_client.call_tool("delete_grocery_list", user_id=user_id):
         logger.info(f"Successfully cleared grocery list for user {user_id}.")
         await update.message.reply_text("🗑️ Your grocery list has been cleared.")
     else:

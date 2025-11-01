@@ -3,7 +3,6 @@ import asyncio
 from typing import Type
 from pydantic import BaseModel  # No specific args needed for this tool
 from langchain.tools import BaseTool
-import grocery_services as gs
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +15,7 @@ class ShowGroceryListTool(BaseTool):
     args_schema: Type[BaseModel] = ShowGroceryListToolInput
     user_id: int
     user_timezone_str: str # Not used, but part of the pattern
+    mcp_client: object
 
     def _run(self) -> str:
         return asyncio.run(self._arun())
@@ -23,7 +23,7 @@ class ShowGroceryListTool(BaseTool):
     async def _arun(self) -> str:
         logger.info(f"ShowGroceryListTool: Called for user {self.user_id}")
         try:
-            grocery_list = await gs.get_grocery_list(self.user_id)
+            grocery_list = await self.mcp_client.call_tool("get_grocery_list", user_id=self.user_id)
             if grocery_list is None:
                 return "Error: Could not retrieve the grocery list at the moment."
             elif not grocery_list:

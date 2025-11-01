@@ -31,3 +31,4 @@ google-cloud-secret-manager>=2.16.0
 
 # --- Audio Processing ---
 # Audio handled via Gemini LLM, no extra packages required
+fastmcp>=2.0.0

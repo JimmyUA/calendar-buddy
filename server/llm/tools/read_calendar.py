@@ -4,8 +4,6 @@ from datetime import datetime
 import pytz  # For timezone handling
 from pytz.exceptions import UnknownTimeZoneError
 
-import google_services as gs
-import calendar_services as cs
 from llm import llm_service
 from llm.tools.calendar_base import CalendarBaseTool
 from llm.tools.formatting import format_event_list_for_agent
@@ -17,6 +15,7 @@ class ReadCalendarEventsTool(CalendarBaseTool):
     name: str = "read_calendar_events"
     description: str = ("Input is a natural language time period (e.g., 'today', 'next week'). Fetches events from the "
                         "user's calendar for that period.")
+    mcp_client: object
 
     # args_schema: Type[BaseModel] = CalendarReadInput # Removed schema
 
@@ -41,7 +40,7 @@ class ReadCalendarEventsTool(CalendarBaseTool):
         end_iso = parsed_args['end_iso']
 
         # 3. Fetch events using structured args
-        events = await cs.get_calendar_events(self.user_id, time_min_iso=start_iso, time_max_iso=end_iso)
+        events = await self.mcp_client.call_tool("get_calendar_events", user_id=self.user_id, time_min_iso=start_iso, time_max_iso=end_iso)
 
         # 4. Format response (remains similar)
         if events is None:
