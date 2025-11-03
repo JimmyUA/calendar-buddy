@@ -38,4 +38,4 @@ mcp.tool(llm_service.extract_search_args_llm)
 mcp.tool(llm_service.extract_create_args_llm)
 
 if __name__ == "__main__":
-    mcp.run()
+    mcp.run(transport="http", port=int(os.getenv('PORT', 8080)))
