@@ -1,7 +1,7 @@
 from fastmcp import FastMCP
-import server.grocery_services as grocery_services
-import server.calendar_services as calendar_services
-from server.llm import llm_service
+import grocery_services as grocery_services
+import calendar_services as calendar_services
+from llm import llm_service
 
 mcp = FastMCP("Telegram Bot Server")
 
