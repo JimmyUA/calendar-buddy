@@ -1,3 +1,7 @@
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from fastmcp import FastMCP
 import grocery_services as grocery_services
 import calendar_services as calendar_services
