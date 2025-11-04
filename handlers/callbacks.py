@@ -6,7 +6,7 @@ from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
 import google_services as gs
-import calendar_services as cs
+import server.calendar_services as cs
 from google_services import (
     get_pending_event,
     delete_pending_event,
