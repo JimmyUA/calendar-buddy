@@ -13,7 +13,7 @@ from google_auth_oauthlib.flow import Flow
 
 import config  # Import our config
 from models import CalendarAccessRequest  # Import the Pydantic model
-from services import pending as pending_service, preferences as prefs_service
+from server.services import pending as pending_service, preferences as prefs_service
 
 logger = logging.getLogger(__name__)
 
