@@ -235,13 +235,16 @@ def gs_module(monkeypatch):
         del sys.modules["google_services"]
     if "server.google_services" in sys.modules:
         del sys.modules["server.google_services"]
-    gs = importlib.import_module("server.google_services")
-    return gs
+    if "server.services.user_token_service" in sys.modules:
+        del sys.modules["server.services.user_token_service"]
+    gs = importlib.import_module("google_services")
+    uts = importlib.import_module("server.services.user_token_service")
+    return gs, uts
 
 # ---- Tests ----
 
 def test_pending_event_flow(gs_module):
-    gs = gs_module
+    gs, uts = gs_module
     user_id = 1
     event = {"id": "abc"}
     assert asyncio.run(gs.add_pending_event(user_id, event))
@@ -252,7 +255,7 @@ def test_pending_event_flow(gs_module):
 
 
 def test_pending_deletion_flow(gs_module):
-    gs = gs_module
+    gs, uts = gs_module
     user_id = 1
     deletion = {"event_id": "xyz"}
     assert asyncio.run(gs.add_pending_deletion(user_id, deletion))
@@ -263,7 +266,7 @@ def test_pending_deletion_flow(gs_module):
 
 
 def test_timezone_set_get(gs_module):
-    gs = gs_module
+    gs, uts = gs_module
     user_id = 2
     assert asyncio.run(gs.set_user_timezone(user_id, "UTC"))
     assert asyncio.run(gs.get_user_timezone_str(user_id)) == "UTC"
@@ -271,7 +274,7 @@ def test_timezone_set_get(gs_module):
 
 
 def test_oauth_state_flow(gs_module):
-    gs = gs_module
+    gs, uts = gs_module
     user_id = 3
     state = asyncio.run(gs.generate_oauth_state(user_id))
     assert state is not None
@@ -281,13 +284,13 @@ def test_oauth_state_flow(gs_module):
 
 
 def test_user_token_flow(gs_module):
-    gs = gs_module
+    gs, uts = gs_module
     user_id = 4
     class Creds:
         def to_json(self):
             return "{}"
     creds = Creds()
-    assert asyncio.run(gs.store_user_credentials(user_id, creds))
-    assert asyncio.run(gs.is_user_connected(user_id))
-    assert asyncio.run(gs.delete_user_token(user_id))
-    assert not asyncio.run(gs.is_user_connected(user_id))
+    assert asyncio.run(uts.store_user_credentials(user_id, creds))
+    assert asyncio.run(uts.is_user_connected(user_id))
+    assert asyncio.run(uts.delete_user_token(user_id))
+    assert not asyncio.run(uts.is_user_connected(user_id))

@@ -61,6 +61,7 @@ def bot_module(monkeypatch):
     config_mod = types.ModuleType("config")
     config_mod.os = types.SimpleNamespace(getenv=lambda k, default=None: default)
     config_mod.TELEGRAM_BOT_TOKEN = "token"
+    config_mod.MCP_SERVER_URL = "http://localhost:8080"
     config_mod.FIRESTORE_DB = object()
     monkeypatch.setitem(sys.modules, "config", config_mod)
 

@@ -8,6 +8,7 @@ import pytz
 
 from utils import _format_event_time
 from .helpers import _get_user_tz_or_prompt, extract_media_text
+from llm.agent import initialize_agent
 
 logger = logging.getLogger(__name__)
 

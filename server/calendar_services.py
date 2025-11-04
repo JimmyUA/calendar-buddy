@@ -8,7 +8,11 @@ from googleapiclient.errors import HttpError
 from google.auth.transport.requests import Request
 
 import config
-from google_services import USER_TOKENS_COLLECTION, store_user_credentials, delete_user_token
+from server.services.user_token_service import (
+    USER_TOKENS_COLLECTION,
+    store_user_credentials,
+    delete_user_token,
+)
 
 logger = logging.getLogger(__name__)
 

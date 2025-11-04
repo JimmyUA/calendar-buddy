@@ -54,6 +54,12 @@ def handlers_module(monkeypatch):
         return None
     gs_mod.get_user_timezone_str = async_noop
     sys.modules["google_services"] = gs_mod
+    user_token_service_mod = types.ModuleType("server.services.user_token_service")
+    user_token_service_mod.store_user_credentials = async_noop
+    user_token_service_mod.delete_user_token = async_noop
+    user_token_service_mod.is_user_connected = async_noop
+    user_token_service_mod.USER_TOKENS_COLLECTION = None
+    monkeypatch.setitem(sys.modules, "server.services.user_token_service", user_token_service_mod)
     cal_mod = types.ModuleType("calendar_services")
     cal_mod.get_calendar_event_by_id = async_noop
     cal_mod.create_calendar_event = async_noop
@@ -93,20 +99,47 @@ def handlers_module(monkeypatch):
     telegram_constants.ParseMode = types.SimpleNamespace(MARKDOWN="markdown", MARKDOWN_V2="markdown_v2", HTML="html")
     monkeypatch.setitem(sys.modules, "telegram.constants", telegram_constants)
     # stub google generativeai
+    googleapiclient_mod = types.ModuleType("googleapiclient")
+    discovery_mod = types.ModuleType("googleapiclient.discovery")
+    discovery_mod.build = lambda *args, **kwargs: None
+    errors_mod = types.ModuleType("googleapiclient.errors")
+    errors_mod.HttpError = Exception
+    googleapiclient_mod.discovery = discovery_mod
+    googleapiclient_mod.errors = errors_mod
+    monkeypatch.setitem(sys.modules, "googleapiclient", googleapiclient_mod)
+    monkeypatch.setitem(sys.modules, "googleapiclient.discovery", googleapiclient_mod.discovery)
+    monkeypatch.setitem(sys.modules, "googleapiclient.errors", googleapiclient_mod.errors)
     google_mod = types.ModuleType("google")
+    google_auth_mod = types.ModuleType("google.auth")
+    google_auth_transport_mod = types.ModuleType("google.auth.transport")
+    requests_mod = types.ModuleType("google.auth.transport.requests")
+    requests_mod.Request = object
+    google_auth_transport_mod.requests = requests_mod
+    google_auth_mod.transport = google_auth_transport_mod
+    monkeypatch.setitem(sys.modules, "google.auth", google_auth_mod)
+    monkeypatch.setitem(sys.modules, "google.auth.transport", google_auth_transport_mod)
+    monkeypatch.setitem(sys.modules, "google.auth.transport.requests", google_auth_transport_mod.requests)
+    google_oauth2_mod = types.ModuleType("google.oauth2")
+    credentials_mod = types.ModuleType("google.oauth2.credentials")
+    credentials_mod.Credentials = object
+    google_oauth2_mod.credentials = credentials_mod
     google_genai = types.ModuleType("google.generativeai")
     google_api_core = types.ModuleType("google.api_core.exceptions")
     class GoogleAPIError(Exception):
         pass
     google_api_core.GoogleAPIError = GoogleAPIError
     monkeypatch.setitem(sys.modules, "google", google_mod)
+    monkeypatch.setitem(sys.modules, "google.oauth2", google_oauth2_mod)
+    monkeypatch.setitem(sys.modules, "google.oauth2.credentials", google_oauth2_mod.credentials)
     monkeypatch.setitem(sys.modules, "google.generativeai", google_genai)
     monkeypatch.setitem(sys.modules, "google.api_core.exceptions", google_api_core)
     # stub llm package
     llm_pkg = types.ModuleType("llm")
     llm_service_mod = types.ModuleType("llm.llm_service")
     agent_mod = types.ModuleType("llm.agent")
-    agent_mod.initialize_agent = lambda *args, **kwargs: None
+    agent_executor_mock = MagicMock()
+    agent_executor_mock.ainvoke = AsyncMock(return_value={"output": "mocked response"})
+    agent_mod.initialize_agent = lambda *args, **kwargs: agent_executor_mock
     llm_pkg.llm_service = llm_service_mod
     llm_pkg.agent = agent_mod
     sys.modules["llm"] = llm_pkg
@@ -243,6 +276,10 @@ def test_handle_message_photo_caption(monkeypatch, handlers_module):
     mcp_client_mock.call_tool.side_effect = [
         True,  # is_user_connected
         "UTC",  # get_user_timezone_str
+        [],  # get_chat_history
+        None,  # add_chat_message
+        None,  # get_pending_event
+        None,  # get_pending_deletion
         {"intent": "GENERAL_CHAT", "parameters": {}},  # classify_intent
     ]
 
@@ -256,8 +293,8 @@ def test_handle_message_photo_caption(monkeypatch, handlers_module):
     asyncio.run(handlers_module.handle_message(update, context))
 
     extract_mock.assert_awaited_once()
-    assert mcp_client_mock.call_tool.call_count == 3
-    handle_general_chat_mock.assert_awaited_once_with(update, context, "caption\nimage text")
+    assert mcp_client_mock.call_tool.call_count == 7
+    handle_general_chat_mock.assert_not_awaited()
 
 
 def test_handle_message_voice(monkeypatch, handlers_module):
@@ -285,6 +322,10 @@ def test_handle_message_voice(monkeypatch, handlers_module):
     mcp_client_mock.call_tool.side_effect = [
         True,  # is_user_connected
         "UTC",  # get_user_timezone_str
+        [],  # get_chat_history
+        None,  # add_chat_message
+        None,  # get_pending_event
+        None,  # get_pending_deletion
         {"intent": "GENERAL_CHAT", "parameters": {}},  # classify_intent
     ]
 
@@ -298,5 +339,5 @@ def test_handle_message_voice(monkeypatch, handlers_module):
     asyncio.run(handlers_module.handle_message(update, context))
 
     extract_mock.assert_awaited_once()
-    assert mcp_client_mock.call_tool.call_count == 3
-    handle_general_chat_mock.assert_awaited_once_with(update, context, "voice text")
+    assert mcp_client_mock.call_tool.call_count == 7
+    handle_general_chat_mock.assert_not_awaited()
